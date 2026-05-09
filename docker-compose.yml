@@ -1,0 +1,27 @@
+services:
+  django:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: dmc_bookkeeping_django
+    container_name: dmc_bookkeeping_django
+    volumes:
+      - ./backend:/app:z
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.local
+      - DB_HOST=dmc-cmr-db
+      - DB_PASSWORD=securepassword123
+    ports:
+      - "8001:8001"
+    networks:
+      - dmc-cmr-network
+    command: >
+      sh -c "python manage.py makemigrations --settings=config.settings.local &&
+             python manage.py migrate --settings=config.settings.local &&
+             python manage.py seed_accounts --settings=config.settings.local &&
+             python manage.py runserver 0.0.0.0:8001 --settings=config.settings.local"
+
+networks:
+  dmc-cmr-network:
+    external: true
+    name: dmc-cmr_dmc-cmr-network
