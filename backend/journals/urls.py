@@ -33,4 +33,7 @@ urlpatterns = [
     # CMR Invoice Import
     path("cmr/invoices", views.cmr_invoices_list),
     path("cmr/invoices/import", views.cmr_invoice_import),
+    # Google Places proxy
+    path("places/autocomplete", views.places_autocomplete),
+    path("places/details", views.places_details),
 ]

@@ -85,7 +85,8 @@ const ImportDialog: React.FC<ImportDialogProps> = ({
       setError(t('importExport.noFile'));
       return;
     }
-    if (!file.name.toLowerCase().endsWith('.csv')) {
+    const ext = file.name.toLowerCase();
+    if (!ext.endsWith('.csv') && !ext.endsWith('.xlsx') && !ext.endsWith('.xls')) {
       setError(t('importExport.invalidFormat'));
       return;
     }
@@ -148,7 +149,7 @@ const ImportDialog: React.FC<ImportDialogProps> = ({
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="lg" fullWidth>
-      <DialogTitle>{t('importExport.importCsv')} — {entityName}</DialogTitle>
+      <DialogTitle>{t('importExport.importFile')} — {entityName}</DialogTitle>
       <DialogContent>
         {loading && <LinearProgress sx={{ mb: 2 }} />}
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -184,11 +185,11 @@ const ImportDialog: React.FC<ImportDialogProps> = ({
               onClick={() => fileInputRef.current?.click()}
             >
               <UploadIcon sx={{ fontSize: 48, color: 'text.secondary', mb: 1 }} />
-              <Typography>{file ? file.name : t('importExport.selectFile')}</Typography>
+              <Typography>{file ? file.name : t('importExport.selectFileExcel')}</Typography>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".csv"
+                accept=".csv,.xlsx,.xls"
                 style={{ display: 'none' }}
                 onChange={handleFileChange}
               />

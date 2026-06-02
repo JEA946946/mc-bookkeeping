@@ -75,6 +75,8 @@ def _invoice_dict(invoice, include_lines=True):
         "balance_due": str(invoice.balance_due),
         "currency": invoice.currency,
         "exchange_rate": str(invoice.exchange_rate),
+        "vat_quarter": invoice.vat_quarter,
+        "vat_year": invoice.vat_year,
         "notes": invoice.notes,
         "journal_entry_id": str(invoice.journal_entry_id) if invoice.journal_entry_id else None,
         "created_by": invoice.created_by,
@@ -355,6 +357,10 @@ def invoices_list_create(request):
                 | Q(customer__name__icontains=q)
                 | Q(notes__icontains=q)
             )
+        if request.query_params.get("vat_quarter"):
+            qs = qs.filter(vat_quarter=request.query_params["vat_quarter"])
+        if request.query_params.get("vat_year"):
+            qs = qs.filter(vat_year=request.query_params["vat_year"])
 
         return Response({
             "success": True,
@@ -412,6 +418,16 @@ def invoices_list_create(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # Auto-calculate VAT quarter from date
+    import datetime as _dt
+    try:
+        inv_date = _dt.date.fromisoformat(str(data["date"]).split("T")[0])
+    except (ValueError, TypeError):
+        inv_date = _dt.date.today()
+    auto_quarter = (inv_date.month - 1) // 3 + 1
+    vat_quarter = int(data.get("vat_quarter", auto_quarter))
+    vat_year = int(data.get("vat_year", inv_date.year))
+
     with transaction.atomic():
         invoice = Invoice.objects.create(
             invoice_number=invoice_number,
@@ -421,6 +437,8 @@ def invoices_list_create(request):
             status="draft",
             currency=data.get("currency", customer.currency),
             exchange_rate=Decimal(str(data.get("exchange_rate", 1))),
+            vat_quarter=vat_quarter,
+            vat_year=vat_year,
             notes=data.get("notes", ""),
             created_by=(
                 f"{request.user.first_name} {request.user.last_name}".strip()
@@ -524,6 +542,11 @@ def invoices_detail(request, pk):
     for field in ("date", "due_date", "currency", "exchange_rate", "notes"):
         if field in data:
             setattr(invoice, field, data[field])
+
+    if "vat_quarter" in data:
+        invoice.vat_quarter = int(data["vat_quarter"])
+    if "vat_year" in data:
+        invoice.vat_year = int(data["vat_year"])
 
     if "invoice_number" in data and data["invoice_number"] != invoice.invoice_number:
         if Invoice.objects.filter(invoice_number=data["invoice_number"]).exclude(id=pk).exists():
@@ -1325,6 +1348,10 @@ def invoices_export(request):
         qs = qs.filter(date__gte=request.query_params["date_from"])
     if request.query_params.get("date_to"):
         qs = qs.filter(date__lte=request.query_params["date_to"])
+    if request.query_params.get("vat_quarter"):
+        qs = qs.filter(vat_quarter=request.query_params["vat_quarter"])
+    if request.query_params.get("vat_year"):
+        qs = qs.filter(vat_year=request.query_params["vat_year"])
 
     response = HttpResponse(content_type="text/csv; charset=utf-8")
     response["Content-Disposition"] = 'attachment; filename="invoices.csv"'
@@ -1333,19 +1360,22 @@ def invoices_export(request):
     writer = csv.writer(response)
     writer.writerow([
         "invoice_number", "customer_code", "customer_name", "date", "due_date",
-        "status", "currency", "line_description", "line_quantity", "line_unit_price",
+        "status", "currency", "vat_quarter", "vat_year",
+        "line_description", "line_quantity", "line_unit_price",
         "line_account_code", "line_tax_code", "line_amount",
         "subtotal", "tax_amount", "total",
     ])
 
     for inv in qs:
         lines = inv.lines.select_related("account", "tax_code").all()
+        vq = f"Q{inv.vat_quarter}"
+        vy = str(inv.vat_year)
         if lines:
             for line in lines:
                 writer.writerow([
                     inv.invoice_number, inv.customer.code, inv.customer.name,
                     inv.date.isoformat(), inv.due_date.isoformat(),
-                    inv.status, inv.currency,
+                    inv.status, inv.currency, vq, vy,
                     line.description, str(line.quantity), str(line.unit_price),
                     line.account.code if line.account else "",
                     line.tax_code.code if line.tax_code else "",
@@ -1356,7 +1386,7 @@ def invoices_export(request):
             writer.writerow([
                 inv.invoice_number, inv.customer.code, inv.customer.name,
                 inv.date.isoformat(), inv.due_date.isoformat(),
-                inv.status, inv.currency,
+                inv.status, inv.currency, vq, vy,
                 "", "", "", "", "", "",
                 str(inv.subtotal), str(inv.tax_amount), str(inv.total),
             ])

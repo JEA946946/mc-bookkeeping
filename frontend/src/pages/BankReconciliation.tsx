@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, Dialog, DialogTitle, DialogContent,
@@ -318,7 +319,7 @@ const BankReconciliation: React.FC = () => {
                         {session.bank_account_name}
                       </Typography>
                     </TableCell>
-                    <TableCell>{session.date}</TableCell>
+                    <TableCell>{formatDate(session.date)}</TableCell>
                     <TableCell align="right">
                       {parseFloat(session.statement_balance).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}
                     </TableCell>
@@ -380,7 +381,7 @@ const BankReconciliation: React.FC = () => {
                     {selectedSession.bank_account_code} — {selectedSession.bank_account_name}
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    {t('common.date')}: {selectedSession.date}
+                    {t('common.date')}: {formatDate(selectedSession.date)}
                   </Typography>
                 </Box>
               </Box>
@@ -528,7 +529,7 @@ const BankReconciliation: React.FC = () => {
                             />
                           </TableCell>
                         )}
-                        <TableCell sx={{ whiteSpace: 'nowrap' }}>{line.date}</TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(line.date)}</TableCell>
                         <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {line.description}
                         </TableCell>
@@ -570,7 +571,7 @@ const BankReconciliation: React.FC = () => {
                   <TableBody>
                     {matchedLines.map(line => (
                       <TableRow key={line.id} hover>
-                        <TableCell sx={{ whiteSpace: 'nowrap' }}>{line.date}</TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(line.date)}</TableCell>
                         <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {line.description}
                         </TableCell>

@@ -5,6 +5,7 @@ import { Box, CircularProgress } from '@mui/material';
 import CssBaseline from '@mui/material/CssBaseline';
 
 import { AuthProvider } from './hooks/useAuth';
+import { SettingsProvider } from './hooks/useSettings';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout/Layout';
 
@@ -35,6 +36,7 @@ const TaxReport = React.lazy(() => import('./pages/TaxReport'));
 const AuditLog = React.lazy(() => import('./pages/AuditLog'));
 const Settings = React.lazy(() => import('./pages/Settings'));
 const Users = React.lazy(() => import('./pages/Users'));
+const AccountingRules = React.lazy(() => import('./pages/AccountingRules'));
 
 const PageLoader = () => (
   <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
@@ -110,6 +112,7 @@ const P = ({ children }: { children: React.ReactNode }) => (
 function App() {
   return (
     <AuthProvider>
+      <SettingsProvider>
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <Router>
@@ -149,11 +152,13 @@ function App() {
               <Route path="/audit-log" element={<P><AuditLog /></P>} />
               <Route path="/settings" element={<P><Settings /></P>} />
               <Route path="/users" element={<P><Users /></P>} />
+              <Route path="/accounting-rules" element={<P><AccountingRules /></P>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
         </Router>
       </ThemeProvider>
+      </SettingsProvider>
     </AuthProvider>
   );
 }

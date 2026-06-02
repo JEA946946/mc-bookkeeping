@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
@@ -68,6 +69,8 @@ interface Invoice {
   total: string;
   amount_paid: string;
   exchange_rate: string;
+  vat_quarter?: number;
+  vat_year?: number;
   lines?: InvoiceLine[];
 }
 
@@ -167,6 +170,8 @@ const Invoices: React.FC = () => {
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
   const [filterSearch, setFilterSearch] = useState('');
+  const [filterVatQuarter, setFilterVatQuarter] = useState('');
+  const [filterVatYear, setFilterVatYear] = useState('');
 
   /* ---------- dialog state ---------- */
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -191,6 +196,8 @@ const Invoices: React.FC = () => {
   const [formDueDate, setFormDueDate] = useState('');
   const [formNotes, setFormNotes] = useState('');
   const [formExchangeRate, setFormExchangeRate] = useState('1');
+  const [formVatQuarter, setFormVatQuarter] = useState('1');
+  const [formVatYear, setFormVatYear] = useState(String(new Date().getFullYear()));
   const [lines, setLines] = useState<InvoiceLine[]>([{ ...EMPTY_LINE }]);
 
   /* ================================================================ */
@@ -204,6 +211,8 @@ const Invoices: React.FC = () => {
     if (filterDateFrom) params.set('date_from', filterDateFrom);
     if (filterDateTo) params.set('date_to', filterDateTo);
     if (filterSearch) params.set('search', filterSearch);
+    if (filterVatQuarter) params.set('vat_quarter', filterVatQuarter);
+    if (filterVatYear) params.set('vat_year', filterVatYear);
     const currentPage = p !== undefined ? p : page;
     params.set('page', String(currentPage + 1));
     params.set('page_size', String(rowsPerPage));
@@ -214,7 +223,7 @@ const Invoices: React.FC = () => {
         setTotalCount(res.data.total_count ?? res.data.data?.total_count ?? res.data.invoices?.length ?? 0);
       }
     });
-  }, [filterStatus, filterCustomerId, filterDateFrom, filterDateTo, filterSearch, page, rowsPerPage]);
+  }, [filterStatus, filterCustomerId, filterDateFrom, filterDateTo, filterSearch, filterVatQuarter, filterVatYear, page, rowsPerPage]);
 
   const fetchLookups = () => {
     api.get('/customers').then(res => {
@@ -261,6 +270,8 @@ const Invoices: React.FC = () => {
     if (filterCustomerId) params.set('customer_id', filterCustomerId);
     if (filterDateFrom) params.set('date_from', filterDateFrom);
     if (filterDateTo) params.set('date_to', filterDateTo);
+    if (filterVatQuarter) params.set('vat_quarter', filterVatQuarter);
+    if (filterVatYear) params.set('vat_year', filterVatYear);
     const qs = params.toString() ? `?${params.toString()}` : '';
     try {
       const res = await api.get(`/invoices/export${qs}`, { responseType: 'blob' });
@@ -348,6 +359,8 @@ const Invoices: React.FC = () => {
           setFormDueDate(full.due_date);
           setFormNotes(full.notes || '');
           setFormExchangeRate(full.exchange_rate || '1');
+          setFormVatQuarter(String(full.vat_quarter ?? 1));
+          setFormVatYear(String(full.vat_year ?? new Date().getFullYear()));
           setLines(
             (full.lines || []).map((l: InvoiceLine) => ({
               description: l.description,
@@ -365,10 +378,14 @@ const Invoices: React.FC = () => {
     } else {
       setEditing(null);
       setFormCustomer(null);
-      setFormDate(new Date().toISOString().split('T')[0]);
+      const today = new Date();
+      const autoQuarter = Math.floor(today.getMonth() / 3) + 1;
+      setFormDate(today.toISOString().split('T')[0]);
       setFormDueDate('');
       setFormNotes('');
       setFormExchangeRate('1');
+      setFormVatQuarter(String(autoQuarter));
+      setFormVatYear(String(today.getFullYear()));
       setLines([{ ...EMPTY_LINE }]);
     }
     setDialogOpen(true);
@@ -400,6 +417,8 @@ const Invoices: React.FC = () => {
       due_date: formDueDate,
       notes: formNotes,
       exchange_rate: formExchangeRate,
+      vat_quarter: parseInt(formVatQuarter, 10),
+      vat_year: parseInt(formVatYear, 10),
       lines: validLines.map(l => ({
         description: l.description,
         quantity: parseFloat(l.quantity || '0'),
@@ -562,6 +581,23 @@ const Invoices: React.FC = () => {
           sx={{ width: 180 }}
           InputProps={{ endAdornment: <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} /> }}
         />
+        <TextField
+          select label={t('invoices.vatQuarter')} value={filterVatQuarter} size="small"
+          onChange={e => setFilterVatQuarter(e.target.value)}
+          sx={{ width: 100 }}
+        >
+          <MenuItem value="">{t('common.all')}</MenuItem>
+          <MenuItem value="1">Q1</MenuItem>
+          <MenuItem value="2">Q2</MenuItem>
+          <MenuItem value="3">Q3</MenuItem>
+          <MenuItem value="4">Q4</MenuItem>
+        </TextField>
+        <TextField
+          label={t('invoices.vatYear')} type="number" value={filterVatYear} size="small"
+          onChange={e => setFilterVatYear(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && handleApplyFilters()}
+          sx={{ width: 90 }}
+        />
         <Button variant="outlined" size="small" onClick={handleApplyFilters}>
           {t('common.apply')}
         </Button>
@@ -584,6 +620,7 @@ const Invoices: React.FC = () => {
               <TableCell align="right" sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{t('invoices.paid')}</TableCell>
               <TableCell align="right" sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{t('invoices.exchangeRate')}</TableCell>
               <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{t('common.status')}</TableCell>
+              <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{t('invoices.vatQuarter')}</TableCell>
               <TableCell align="right" sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{t('common.actions')}</TableCell>
             </TableRow>
           </TableHead>
@@ -603,8 +640,8 @@ const Invoices: React.FC = () => {
                   )}
                   {inv.customer_name}
                 </TableCell>
-                <TableCell>{inv.date}</TableCell>
-                <TableCell>{inv.due_date}</TableCell>
+                <TableCell>{formatDate(inv.date)}</TableCell>
+                <TableCell>{formatDate(inv.due_date)}</TableCell>
                 <TableCell align="right">{fmt(inv.subtotal)}</TableCell>
                 <TableCell align="right">{fmt(inv.tax_amount)}</TableCell>
                 <TableCell align="right" sx={{ fontWeight: 600 }}>{fmt(inv.total)}</TableCell>
@@ -616,6 +653,11 @@ const Invoices: React.FC = () => {
                     size="small"
                     color={STATUS_CHIP_COLOR[inv.status] || 'default'}
                   />
+                </TableCell>
+                <TableCell>
+                  <Typography variant="body2" sx={{ whiteSpace: 'nowrap' }}>
+                    Q{inv.vat_quarter} {inv.vat_year}
+                  </Typography>
                 </TableCell>
                 <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
                   <Tooltip title={t('common.view')}>
@@ -652,7 +694,7 @@ const Invoices: React.FC = () => {
             ))}
             {invoices.length === 0 && (
               <TableRow>
-                <TableCell colSpan={11} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={12} align="center" sx={{ py: 4 }}>
                   <Typography variant="body2" color="text.secondary">{t('invoices.noInvoices')}</Typography>
                 </TableCell>
               </TableRow>
@@ -694,7 +736,15 @@ const Invoices: React.FC = () => {
             />
             <TextField
               label={t('common.date')} type="date" value={formDate} size="small" required
-              onChange={e => setFormDate(e.target.value)}
+              onChange={e => {
+                const val = e.target.value;
+                setFormDate(val);
+                const d = new Date(val);
+                if (!isNaN(d.getTime())) {
+                  setFormVatQuarter(String(Math.floor(d.getMonth() / 3) + 1));
+                  setFormVatYear(String(d.getFullYear()));
+                }
+              }}
               InputLabelProps={{ shrink: true }} sx={{ width: 160 }}
             />
             <TextField
@@ -707,6 +757,21 @@ const Invoices: React.FC = () => {
               onChange={e => setFormExchangeRate(e.target.value)}
               inputProps={{ min: 0, step: '0.0001' }}
               sx={{ width: 130 }}
+            />
+            <TextField
+              select label={t('invoices.vatQuarter')} value={formVatQuarter} size="small"
+              onChange={e => setFormVatQuarter(e.target.value)}
+              sx={{ width: 100 }}
+            >
+              <MenuItem value="1">Q1</MenuItem>
+              <MenuItem value="2">Q2</MenuItem>
+              <MenuItem value="3">Q3</MenuItem>
+              <MenuItem value="4">Q4</MenuItem>
+            </TextField>
+            <TextField
+              label={t('invoices.vatYear')} value={formVatYear} size="small" type="number"
+              onChange={e => setFormVatYear(e.target.value)}
+              sx={{ width: 90 }}
             />
             <TextField
               label={t('invoices.remarks')} value={formNotes} size="small" multiline maxRows={3}
@@ -853,11 +918,11 @@ const Invoices: React.FC = () => {
                 </Box>
                 <Box>
                   <Typography variant="caption" color="text.secondary">{t('common.date')}</Typography>
-                  <Typography variant="body2">{viewing.date}</Typography>
+                  <Typography variant="body2">{formatDate(viewing.date)}</Typography>
                 </Box>
                 <Box>
                   <Typography variant="caption" color="text.secondary">{t('invoices.dueDate')}</Typography>
-                  <Typography variant="body2">{viewing.due_date}</Typography>
+                  <Typography variant="body2">{formatDate(viewing.due_date)}</Typography>
                 </Box>
                 {viewing.exchange_rate && viewing.exchange_rate !== '1' && viewing.exchange_rate !== '1.0000' && (
                   <Box>

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
@@ -439,7 +440,7 @@ const Customers: React.FC = () => {
               <TableBody>
                 {statementLines.map((line) => (
                   <TableRow key={line.id} hover>
-                    <TableCell>{line.date}</TableCell>
+                    <TableCell>{formatDate(line.date)}</TableCell>
                     <TableCell>
                       <Chip
                         label={line.type === 'invoice' ? t('common.invoice') : line.type === 'payment' ? t('common.payment') : line.type}

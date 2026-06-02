@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
@@ -16,6 +17,7 @@ import api from '../services/api';
 interface Supplier {
   id: string;
   name: string;
+  default_account_id?: string | null;
 }
 
 interface Account {
@@ -166,10 +168,15 @@ const Expenses: React.FC = () => {
       if (res.data.success) {
         const full = res.data.data.expense;
         setEditing(full);
+        let supplierId = full.supplier_id || '';
+        if (!supplierId && full.account_id) {
+          const matched = suppliers.find(s => s.default_account_id === full.account_id);
+          if (matched) supplierId = matched.id;
+        }
         setForm({
           date: full.date,
           description: full.description,
-          supplier_id: full.supplier_id || '',
+          supplier_id: supplierId,
           amount: full.amount,
           account_id: full.account_id,
           tax_code_id: full.tax_code_id || '',
@@ -318,7 +325,7 @@ const Expenses: React.FC = () => {
           <TableBody>
             {expenses.map(exp => (
               <TableRow key={exp.id} hover sx={{ '& td': { py: 0.3, whiteSpace: 'nowrap' } }}>
-                <TableCell>{exp.date}</TableCell>
+                <TableCell>{formatDate(exp.date)}</TableCell>
                 <TableCell sx={{ maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {exp.description}
                 </TableCell>
@@ -396,7 +403,15 @@ const Expenses: React.FC = () => {
               size="small"
               options={suppliers}
               value={selectedSupplier}
-              onChange={(_, val) => setForm(prev => ({ ...prev, supplier_id: val?.id || '' }))}
+              onChange={(_, val) => {
+                setForm(prev => {
+                  const updated = { ...prev, supplier_id: val?.id || '' };
+                  if (val?.default_account_id && !prev.account_id) {
+                    updated.account_id = val.default_account_id;
+                  }
+                  return updated;
+                });
+              }}
               getOptionLabel={(o) => o.name}
               isOptionEqualToValue={(o, v) => o.id === v.id}
               renderInput={(params) => <TextField {...params} label={t('expenses.supplierOptional')} />}
@@ -414,7 +429,16 @@ const Expenses: React.FC = () => {
               size="small"
               options={accounts}
               value={selectedAccount}
-              onChange={(_, val) => setForm(prev => ({ ...prev, account_id: val?.id || '' }))}
+              onChange={(_, val) => {
+                setForm(prev => {
+                  const updated = { ...prev, account_id: val?.id || '' };
+                  if (val?.id && !prev.supplier_id) {
+                    const matched = suppliers.find(s => s.default_account_id === val.id);
+                    if (matched) updated.supplier_id = matched.id;
+                  }
+                  return updated;
+                });
+              }}
               getOptionLabel={(o) => `${o.code} — ${o.name}`}
               isOptionEqualToValue={(o, v) => o.id === v.id}
               renderInput={(params) => <TextField {...params} label={`${t('common.account')} *`} />}
@@ -508,7 +532,7 @@ const Expenses: React.FC = () => {
               <Box sx={{ display: 'flex', gap: 4 }}>
                 <Box>
                   <Typography variant="caption" color="text.secondary">{t('common.date')}</Typography>
-                  <Typography variant="body2">{viewing.date}</Typography>
+                  <Typography variant="body2">{formatDate(viewing.date)}</Typography>
                 </Box>
                 <Box>
                   <Typography variant="caption" color="text.secondary">{t('expenses.paymentMethod')}</Typography>

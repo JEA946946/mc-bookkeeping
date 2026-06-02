@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import { Box, Card, CardContent, Typography, Grid, TextField, Button } from '@mui/material';
 import {
   AccountBalance as AssetsIcon,
@@ -149,7 +150,7 @@ const Dashboard: React.FC = () => {
                   >
                     <Box>
                       <Typography variant="body2" sx={{ fontWeight: 500 }}>{entry.entry_number}</Typography>
-                      <Typography variant="caption" color="text.secondary">{entry.description || entry.date}</Typography>
+                      <Typography variant="caption" color="text.secondary">{entry.description || formatDate(entry.date)}</Typography>
                     </Box>
                     <Typography variant="body2" sx={{ fontWeight: 500 }}>{parseFloat(entry.total_debit).toLocaleString(i18n.language)} MAD</Typography>
                   </Box>

@@ -1,0 +1,29 @@
+services:
+  django:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: dmc_bookkeeping_django
+    container_name: dmc_bookkeeping_django
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.server
+      - DB_HOST=dmc-cmr-db
+      - DB_PASSWORD=securepassword123
+      - DJANGO_SECRET_KEY=yR6la1a2Pqj2iFdWDF45BDXVOTPvg2tGAS3K38CeZlM-pYs-U-QM4LfoX5LFZebAhJA
+      - DJANGO_ALLOWED_HOSTS=bookkeeping.vmmorocco.com
+      - CORS_ALLOWED_ORIGINS=https://bookkeeping.vmmorocco.com
+      - CMR_API_TOKEN=kJs57MjCkS9hyfdePvjC18iHK-Q8U2LrJq4g28r-t0Y
+      - CMR_API_BASE=http://dmc_cmr_django_local_django:8000/api/v1
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py seed_accounts &&
+             python manage.py collectstatic --noinput &&
+             gunicorn config.wsgi:application --bind 0.0.0.0:8001 --workers 2 --timeout 120"
+    restart: unless-stopped
+    networks:
+      - dmc-cmr-network
+
+networks:
+  dmc-cmr-network:
+    external: true
+    name: dmc-cmr_dmc-cmr-network

@@ -3,6 +3,7 @@
 import csv
 import io
 import re
+from datetime import date as date_today_mod
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
@@ -34,6 +35,7 @@ def _supplier_dict(supplier):
         "payment_terms": supplier.payment_terms,
         "notes": supplier.notes,
         "cmr_id": supplier.cmr_id,
+        "default_account_id": str(supplier.default_account_id) if supplier.default_account_id else None,
         "is_active": supplier.is_active,
         "created_at": supplier.created_at.isoformat() if supplier.created_at else None,
         "updated_at": supplier.updated_at.isoformat() if supplier.updated_at else None,
@@ -50,19 +52,20 @@ def _bill_line_dict(line):
         "tax_code_id": str(line.tax_code_id) if line.tax_code_id else None,
         "tax_code_name": line.tax_code.name if line.tax_code else None,
         "tax_rate": str(line.tax_code.rate) if line.tax_code else None,
-        "account_id": str(line.account_id),
-        "account_code": line.account.code,
-        "account_name": line.account.name,
+        "account_id": str(line.account_id) if line.account_id else None,
+        "account_code": line.account.code if line.account else None,
+        "account_name": line.account.name if line.account else None,
         "amount": str(line.amount),
     }
 
 
 def _bill_dict(bill, include_lines=True):
+    supplier = bill.supplier if bill.supplier_id else None
     d = {
         "id": str(bill.id),
         "bill_number": bill.bill_number,
-        "supplier_id": str(bill.supplier_id),
-        "supplier_name": bill.supplier.name if bill.supplier else None,
+        "supplier_id": str(bill.supplier_id) if bill.supplier_id else None,
+        "supplier_name": supplier.name if supplier else None,
         "date": bill.date.isoformat() if hasattr(bill.date, "isoformat") else str(bill.date),
         "due_date": bill.due_date.isoformat() if hasattr(bill.due_date, "isoformat") else str(bill.due_date),
         "status": bill.status,
@@ -72,6 +75,8 @@ def _bill_dict(bill, include_lines=True):
         "paid_amount": str(bill.paid_amount),
         "balance_due": str(bill.balance_due),
         "currency": bill.currency,
+        "vat_quarter": bill.vat_quarter,
+        "vat_year": bill.vat_year,
         "reference": bill.reference,
         "notes": bill.notes,
         "journal_entry_id": str(bill.journal_entry_id) if bill.journal_entry_id else None,
@@ -80,10 +85,20 @@ def _bill_dict(bill, include_lines=True):
         "updated_at": bill.updated_at.isoformat() if bill.updated_at else None,
     }
     if include_lines:
-        d["lines"] = [
-            _bill_line_dict(l)
-            for l in bill.lines.select_related("account", "tax_code").all()
-        ]
+        lines_qs = bill.lines.select_related("account", "tax_code").all()
+        d["lines"] = [_bill_line_dict(l) for l in lines_qs]
+    else:
+        # Include account codes for row highlighting in list view
+        if hasattr(bill, '_prefetched_objects_cache') and 'lines' in bill._prefetched_objects_cache:
+            d["line_account_codes"] = list({
+                l.account.code for l in bill.lines.all() if l.account_id and l.account
+            })
+        else:
+            d["line_account_codes"] = list(
+                bill.lines.filter(account__isnull=False)
+                .values_list("account__code", flat=True)
+                .distinct()
+            )
     return d
 
 
@@ -159,6 +174,60 @@ def _next_je_entry_number():
 
 # ─── Suppliers CRUD ──────────────────────────────────────────────────────────
 
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def suppliers_import_cmr_bulk(request):
+    """Bulk-import CMR suppliers. Expects { suppliers: [...] }."""
+    items = request.data.get("suppliers", [])
+    if not items:
+        return Response(
+            {"success": False, "message": "No suppliers provided"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    existing_cmr_ids = set(
+        Supplier.objects.exclude(cmr_id="").values_list("cmr_id", flat=True)
+    )
+
+    created = 0
+    skipped = 0
+    errors = []
+    for item in items:
+        cmr_id = item.get("id") or ""
+        name = (item.get("name") or "").strip()
+        if not name:
+            skipped += 1
+            continue
+        if cmr_id and cmr_id in existing_cmr_ids:
+            skipped += 1
+            continue
+
+        try:
+            Supplier.objects.create(
+                code=_next_supplier_code(),
+                name=name,
+                email=item.get("email") or "",
+                phone=item.get("phone") or "",
+                address=item.get("address") or "",
+                currency=item.get("currency") or "MAD",
+                cmr_id=cmr_id,
+            )
+            created += 1
+            if cmr_id:
+                existing_cmr_ids.add(cmr_id)
+        except Exception as e:
+            errors.append(f"{name}: {e}")
+            skipped += 1
+
+    return Response({
+        "success": True,
+        "created": created,
+        "skipped": skipped,
+        "errors": errors[:10],
+    })
+
+
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def suppliers_list_create(request):
@@ -196,6 +265,7 @@ def suppliers_list_create(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    default_account_id = data.get("default_account_id") or None
     supplier = Supplier.objects.create(
         code=code,
         name=data["name"],
@@ -206,6 +276,7 @@ def suppliers_list_create(request):
         currency=data.get("currency", "MAD"),
         payment_terms=data.get("payment_terms", 30),
         notes=data.get("notes", ""),
+        default_account_id=default_account_id,
         is_active=data.get("is_active", True),
     )
     return Response({
@@ -245,6 +316,8 @@ def suppliers_detail(request, pk):
                       "currency", "payment_terms", "notes", "is_active"):
             if field in data:
                 setattr(supplier, field, data[field])
+        if "default_account_id" in data:
+            supplier.default_account_id = data["default_account_id"] or None
         supplier.save()
         return Response({
             "success": True,
@@ -300,7 +373,7 @@ def supplier_statement(request, pk):
 @permission_classes([IsAuthenticated])
 def bills_list_create(request):
     if request.method == "GET":
-        qs = Bill.objects.select_related("supplier")
+        qs = Bill.objects.all()
 
         # Filters
         if request.query_params.get("status"):
@@ -317,11 +390,63 @@ def bills_list_create(request):
                 Q(bill_number__icontains=q)
                 | Q(supplier__name__icontains=q)
                 | Q(reference__icontains=q)
+                | Q(notes__icontains=q)
             )
+        if request.query_params.get("amount_min"):
+            qs = qs.filter(total__gte=request.query_params["amount_min"])
+        if request.query_params.get("amount_max"):
+            qs = qs.filter(total__lte=request.query_params["amount_max"])
+        if request.query_params.get("overdue") == "true":
+            qs = qs.filter(due_date__lt=date_today_mod.today()).exclude(status="paid")
+        if request.query_params.get("no_supplier") == "true":
+            qs = qs.filter(supplier__isnull=True)
+        if request.query_params.get("has_supplier") == "true":
+            qs = qs.filter(supplier__isnull=False)
+        if request.query_params.get("vat_quarter"):
+            qs = qs.filter(vat_quarter=request.query_params["vat_quarter"])
+        if request.query_params.get("vat_year"):
+            qs = qs.filter(vat_year=request.query_params["vat_year"])
+
+        # Sorting
+        sort_field = request.query_params.get("sort", "date")
+        sort_dir = request.query_params.get("sort_dir", "desc")
+        allowed_sort = {
+            "bill_number": "bill_number",
+            "supplier_name": "supplier__name",
+            "date": "date",
+            "due_date": "due_date",
+            "subtotal": "subtotal",
+            "tax_amount": "tax_amount",
+            "total": "total",
+            "paid_amount": "paid_amount",
+            "status": "status",
+            "vat_quarter": "vat_year",
+        }
+        order_field = allowed_sort.get(sort_field, "date")
+        prefix = "-" if sort_dir == "desc" else ""
+        if sort_field == "vat_quarter":
+            qs = qs.order_by(f"{prefix}{order_field}", f"{prefix}vat_quarter", "-created_at")
+        else:
+            qs = qs.order_by(f"{prefix}{order_field}", "-created_at")
+        total_count = qs.count()
+
+        # Pagination
+        try:
+            page = int(request.query_params.get("page", 1))
+            page_size = int(request.query_params.get("page_size", 50))
+        except (ValueError, TypeError):
+            page, page_size = 1, 50
+        page_size = min(page_size, 200)
+        offset = (page - 1) * page_size
+        qs = qs[offset : offset + page_size]
+        qs = qs.prefetch_related("lines__account")
 
         return Response({
             "success": True,
-            "data": {"bills": [_bill_dict(b, include_lines=False) for b in qs]},
+            "data": {
+                "bills": [_bill_dict(b, include_lines=False) for b in qs],
+                "total_count": total_count,
+            },
         })
 
     # POST — create bill with lines
@@ -373,6 +498,16 @@ def bills_list_create(request):
 
     bill_number = data.get("bill_number") or _next_bill_number()
 
+    # Auto-calculate VAT quarter from date
+    import datetime as _dt
+    try:
+        bill_date = _dt.date.fromisoformat(str(data["date"]).split("T")[0])
+    except (ValueError, TypeError):
+        bill_date = _dt.date.today()
+    auto_quarter = (bill_date.month - 1) // 3 + 1
+    vat_quarter = int(data.get("vat_quarter", auto_quarter))
+    vat_year = int(data.get("vat_year", bill_date.year))
+
     with transaction.atomic():
         bill = Bill.objects.create(
             bill_number=bill_number,
@@ -381,6 +516,8 @@ def bills_list_create(request):
             due_date=data["due_date"],
             status="draft",
             currency=data.get("currency", "MAD"),
+            vat_quarter=vat_quarter,
+            vat_year=vat_year,
             reference=data.get("reference", ""),
             notes=data.get("notes", ""),
             created_by=(
@@ -436,7 +573,7 @@ def bills_list_create(request):
 @permission_classes([IsAuthenticated])
 def bills_detail(request, pk):
     try:
-        bill = Bill.objects.select_related("supplier").get(id=pk)
+        bill = Bill.objects.get(id=pk)
     except Bill.DoesNotExist:
         return Response(
             {"success": False, "message": "Bill not found"},
@@ -480,6 +617,11 @@ def bills_detail(request, pk):
     for field in ("date", "due_date", "currency", "reference", "notes"):
         if field in data:
             setattr(bill, field, data[field])
+
+    if "vat_quarter" in data:
+        bill.vat_quarter = int(data["vat_quarter"])
+    if "vat_year" in data:
+        bill.vat_year = int(data["vat_year"])
 
     if "bill_number" in data and data["bill_number"] != bill.bill_number:
         if Bill.objects.filter(bill_number=data["bill_number"]).exclude(id=pk).exists():
@@ -553,47 +695,28 @@ def bills_detail(request, pk):
     })
 
 
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def bill_approve(request, pk):
-    """Approve a bill: create journal entry (DR expense accounts, CR Accounts Payable)."""
-    try:
-        bill = Bill.objects.select_related("supplier").get(id=pk)
-    except Bill.DoesNotExist:
-        return Response(
-            {"success": False, "message": "Bill not found"},
-            status=status.HTTP_404_NOT_FOUND,
-        )
+def _approve_bill(bill, created_by):
+    """Approve a single bill: create journal entry (DR expense, CR AP).
 
+    Returns (True, None) on success or (False, "error message") on failure.
+    """
     if bill.status != "draft":
-        return Response(
-            {"success": False, "message": "Only draft bills can be approved"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        return False, "Only draft bills can be approved"
+
+    if not bill.supplier:
+        return False, "Supplier must be assigned before approving"
 
     # Accounts Payable — code 200000
     try:
         ap_account = Account.objects.get(code="200000")
     except Account.DoesNotExist:
-        return Response(
-            {"success": False, "message": "Accounts Payable account (200000) not found"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        return False, "Accounts Payable account (200000) not found"
 
     lines = bill.lines.select_related("account", "tax_code").all()
     if not lines:
-        return Response(
-            {"success": False, "message": "Bill has no lines"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    created_by = (
-        f"{request.user.first_name} {request.user.last_name}".strip()
-        or request.user.username
-    )
+        return False, "Bill has no lines"
 
     with transaction.atomic():
-        # Create the journal entry
         entry = JournalEntry.objects.create(
             entry_number=_next_je_entry_number(),
             date=bill.date,
@@ -604,7 +727,6 @@ def bill_approve(request, pk):
             created_by=created_by,
         )
 
-        # DR lines: aggregate by account for expense accounts
         account_totals = {}
         total_tax = Decimal("0")
         tax_account = None
@@ -618,14 +740,12 @@ def bill_approve(request, pk):
                 }
             account_totals[acct_id]["amount"] += line.amount
 
-            # Accumulate tax
             if line.tax_code:
                 line_tax = line.amount * line.tax_code.rate / Decimal("100")
                 total_tax += line_tax
                 if not tax_account:
                     tax_account = line.tax_code.account
 
-        # Create DR lines for each unique expense account
         for acct_id, info in account_totals.items():
             JournalEntryLine.objects.create(
                 journal_entry=entry,
@@ -635,7 +755,6 @@ def bill_approve(request, pk):
                 description=f"Bill {bill.bill_number}",
             )
 
-        # If there is tax, add a DR line for the tax account
         if total_tax > 0 and tax_account:
             JournalEntryLine.objects.create(
                 journal_entry=entry,
@@ -645,7 +764,6 @@ def bill_approve(request, pk):
                 description=f"Tax on Bill {bill.bill_number}",
             )
 
-        # CR line: Accounts Payable for the full bill total
         JournalEntryLine.objects.create(
             journal_entry=entry,
             account=ap_account,
@@ -654,16 +772,78 @@ def bill_approve(request, pk):
             description=f"Bill {bill.bill_number} — {bill.supplier.name}",
         )
 
-        # Update bill
         bill.status = "approved"
         bill.journal_entry = entry
         bill.save()
+
+    return True, None
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bill_approve(request, pk):
+    """Approve a bill: create journal entry (DR expense accounts, CR Accounts Payable)."""
+    try:
+        bill = Bill.objects.get(id=pk)
+    except Bill.DoesNotExist:
+        return Response(
+            {"success": False, "message": "Bill not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    created_by = (
+        f"{request.user.first_name} {request.user.last_name}".strip()
+        or request.user.username
+    )
+
+    ok, err = _approve_bill(bill, created_by)
+    if not ok:
+        return Response(
+            {"success": False, "message": err},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     bill.refresh_from_db()
     return Response({
         "success": True,
         "message": "Bill approved and journal entry created",
         "data": {"bill": _bill_dict(bill)},
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bills_bulk_approve(request):
+    """Bulk-approve draft bills that have a supplier assigned."""
+    bill_ids = request.data.get("bill_ids", [])
+    if not bill_ids:
+        return Response(
+            {"success": False, "message": "No bill IDs provided"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    created_by = (
+        f"{request.user.first_name} {request.user.last_name}".strip()
+        or request.user.username
+    )
+
+    bills = Bill.objects.filter(
+        id__in=bill_ids, status="draft", supplier__isnull=False
+    )
+
+    approved_count = 0
+    errors = []
+    for bill in bills:
+        ok, err = _approve_bill(bill, created_by)
+        if ok:
+            approved_count += 1
+        else:
+            errors.append(f"{bill.bill_number}: {err}")
+
+    return Response({
+        "success": True,
+        "approved_count": approved_count,
+        "errors": errors,
     })
 
 
@@ -980,29 +1160,71 @@ def expense_approve(request, pk):
 
 # ─── Supplier Import / Export ────────────────────────────────────────────────
 
+def _parse_import_file(f):
+    """Parse CSV or Excel file and return list of dicts (rows)."""
+    filename = getattr(f, "name", "").lower()
+    if filename.endswith((".xlsx", ".xls")):
+        import openpyxl
+        # Ensure file pointer is at start and wrap in BytesIO for openpyxl
+        raw = f.read()
+        wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        ws = wb.active
+        rows_iter = ws.iter_rows(values_only=True)
+        header_row = next(rows_iter, None)
+        if not header_row:
+            return None, "Empty spreadsheet"
+        headers = [str(h).strip().lower() if h else "" for h in header_row]
+        parsed = []
+        for row in rows_iter:
+            if all(c is None or str(c).strip() == "" for c in row):
+                continue
+            d = {}
+            for i, h in enumerate(headers):
+                if h and i < len(row):
+                    val = row[i]
+                    if val is None:
+                        d[h] = ""
+                    elif hasattr(val, "isoformat"):
+                        # datetime/date objects from Excel → ISO string
+                        d[h] = val.isoformat().split("T")[0] if hasattr(val, "date") else val.isoformat()
+                    else:
+                        d[h] = str(val).strip()
+                elif h:
+                    d[h] = ""
+            parsed.append(d)
+        wb.close()
+        return parsed, None
+    else:
+        try:
+            text = f.read().decode("utf-8-sig")
+        except UnicodeDecodeError:
+            return None, "File must be UTF-8 encoded"
+        reader = csv.DictReader(io.StringIO(text))
+        if not reader.fieldnames:
+            return None, "Empty or invalid CSV"
+        return list(reader), None
+
+
 @api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
 @permission_classes([IsAuthenticated])
-@parser_classes([MultiPartParser])
 def suppliers_import_preview(request):
-    """Parse uploaded CSV and return preview with duplicate detection."""
+    """Parse uploaded CSV/Excel and return preview with duplicate detection."""
     f = request.FILES.get("file")
     if not f:
         return Response({"success": False, "message": "No file uploaded"}, status=400)
 
-    try:
-        text = f.read().decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return Response({"success": False, "message": "File must be UTF-8 encoded"}, status=400)
-
-    reader = csv.DictReader(io.StringIO(text))
-    if not reader.fieldnames:
-        return Response({"success": False, "message": "Empty or invalid CSV"}, status=400)
+    parsed_rows, err = _parse_import_file(f)
+    if err:
+        return Response({"success": False, "message": err}, status=400)
+    if not parsed_rows:
+        return Response({"success": False, "message": "No data found in file"}, status=400)
 
     existing_codes = {s.code: s for s in Supplier.objects.all()}
     existing_names = {s.name.lower(): s for s in Supplier.objects.all()}
     rows = []
 
-    for i, row in enumerate(reader, start=1):
+    for i, row in enumerate(parsed_rows, start=1):
         name = (row.get("name") or "").strip()
         code = (row.get("code") or "").strip()
         email = (row.get("email") or "").strip()
@@ -1140,7 +1362,7 @@ def suppliers_import_confirm(request):
 @permission_classes([IsAuthenticated])
 def bills_export(request):
     """Export all bills (with lines) as a flat CSV."""
-    qs = Bill.objects.select_related("supplier").prefetch_related(
+    qs = Bill.objects.prefetch_related(
         "lines__account", "lines__tax_code"
     ).all()
 
@@ -1152,6 +1374,18 @@ def bills_export(request):
         qs = qs.filter(date__gte=request.query_params["date_from"])
     if request.query_params.get("date_to"):
         qs = qs.filter(date__lte=request.query_params["date_to"])
+    if request.query_params.get("amount_min"):
+        qs = qs.filter(total__gte=request.query_params["amount_min"])
+    if request.query_params.get("amount_max"):
+        qs = qs.filter(total__lte=request.query_params["amount_max"])
+    if request.query_params.get("overdue") == "true":
+        qs = qs.filter(due_date__lt=date_today_mod.today()).exclude(status="paid")
+    if request.query_params.get("no_supplier") == "true":
+        qs = qs.filter(supplier__isnull=True)
+    if request.query_params.get("vat_quarter"):
+        qs = qs.filter(vat_quarter=request.query_params["vat_quarter"])
+    if request.query_params.get("vat_year"):
+        qs = qs.filter(vat_year=request.query_params["vat_year"])
 
     response = HttpResponse(content_type="text/csv; charset=utf-8")
     response["Content-Disposition"] = 'attachment; filename="bills.csv"'
@@ -1160,19 +1394,24 @@ def bills_export(request):
     writer = csv.writer(response)
     writer.writerow([
         "bill_number", "supplier_code", "supplier_name", "date", "due_date",
-        "status", "reference", "currency", "line_description", "line_quantity",
+        "status", "reference", "currency", "vat_quarter", "vat_year",
+        "line_description", "line_quantity",
         "line_unit_price", "line_account_code", "line_tax_code", "line_amount",
         "subtotal", "tax_amount", "total",
     ])
 
     for bill in qs:
         lines = bill.lines.select_related("account", "tax_code").all()
+        sup_code = bill.supplier.code if bill.supplier else ""
+        sup_name = bill.supplier.name if bill.supplier else ""
+        vq = f"Q{bill.vat_quarter}"
+        vy = str(bill.vat_year)
         if lines:
             for line in lines:
                 writer.writerow([
-                    bill.bill_number, bill.supplier.code, bill.supplier.name,
+                    bill.bill_number, sup_code, sup_name,
                     bill.date.isoformat(), bill.due_date.isoformat(),
-                    bill.status, bill.reference, bill.currency,
+                    bill.status, bill.reference, bill.currency, vq, vy,
                     line.description, str(line.quantity), str(line.unit_price),
                     line.account.code if line.account else "",
                     line.tax_code.code if line.tax_code else "",
@@ -1181,11 +1420,275 @@ def bills_export(request):
                 ])
         else:
             writer.writerow([
-                bill.bill_number, bill.supplier.code, bill.supplier.name,
+                bill.bill_number, sup_code, sup_name,
                 bill.date.isoformat(), bill.due_date.isoformat(),
-                bill.status, bill.reference, bill.currency,
+                bill.status, bill.reference, bill.currency, vq, vy,
                 "", "", "", "", "", "",
                 str(bill.subtotal), str(bill.tax_amount), str(bill.total),
             ])
 
     return response
+
+
+# ─── Bill Import ─────────────────────────────────────────────────────────────
+#
+# Expected columns:
+#   supplier, document_type, document_no, booking_ref, traveler,
+#   travel_date, invoice_date, due_date, currency, amount,
+#   account, tax_code, status, notes
+#
+
+@api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
+@permission_classes([IsAuthenticated])
+def bills_import_preview(request):
+    """Parse uploaded CSV/Excel and return preview of bills to create."""
+    f = request.FILES.get("file")
+    if not f:
+        return Response({"success": False, "message": "No file uploaded"}, status=400)
+
+    parsed_rows, err = _parse_import_file(f)
+    if err:
+        return Response({"success": False, "message": err}, status=400)
+    if not parsed_rows:
+        return Response({"success": False, "message": "No data found in file"}, status=400)
+
+    # Build lookup maps
+    suppliers_by_code = {s.code.lower(): s for s in Supplier.objects.all()}
+    suppliers_by_name = {s.name.lower(): s for s in Supplier.objects.all()}
+    accounts_by_code = {a.code: a for a in Account.objects.filter(is_active=True)}
+    from core.models import TaxCode
+    tax_codes_by_code = {tc.code.lower(): tc for tc in TaxCode.objects.all()}
+
+    existing_doc_nos = set(
+        Bill.objects.exclude(reference="").values_list("reference", flat=True)
+    )
+
+    rows = []
+    for i, row in enumerate(parsed_rows, start=1):
+        supplier_name = (row.get("supplier") or row.get("leverandør") or row.get("supplier_name") or "").strip()
+        supplier_code = (row.get("supplier mr") or row.get("supplier_code") or row.get("leverandør nr") or "").strip()
+        bill_number_raw = (row.get("regning nr") or row.get("bill_number") or row.get("regningsnr") or "").strip()
+        document_type = (row.get("document_type") or row.get("dokumenttype") or row.get("type") or "").strip()
+        document_no = (row.get("document_no") or row.get("dokumentnr") or row.get("document_number") or bill_number_raw or "").strip()
+        booking_ref = (row.get("booking_ref") or row.get("bookingref") or row.get("booking") or "").strip()
+        traveler = (row.get("traveler") or row.get("rejsende") or row.get("traveller") or "").strip()
+        travel_date = (row.get("travel_date") or row.get("rejsedato") or "").strip()
+        invoice_date = (row.get("invoice_date") or row.get("fakturadato") or row.get("date") or row.get("dato") or "").strip()
+        due_date = (row.get("due_date") or row.get("forfaldsdato") or "").strip()
+        currency = (row.get("currency") or row.get("valuta") or "MAD").strip().upper()
+        amount = (row.get("amount") or row.get("beløb") or "0").strip()
+        account_code = (row.get("account") or row.get("konto") or row.get("account_code") or "").strip()
+        tax_code = (row.get("tax_code") or row.get("momskode") or "").strip()
+        bill_status = (row.get("status") or "").strip()
+        notes = (row.get("notes") or row.get("bemærkninger") or "").strip()
+
+        errors = []
+
+        # Resolve supplier by name, then by code — not required at preview time
+        supplier_id = None
+        resolved_supplier_name = supplier_name
+        # Try by supplier name first
+        if supplier_name and supplier_name.lower() in suppliers_by_name:
+            s = suppliers_by_name[supplier_name.lower()]
+            supplier_id = str(s.id)
+            resolved_supplier_name = s.name
+        elif supplier_name and supplier_name.lower() in suppliers_by_code:
+            s = suppliers_by_code[supplier_name.lower()]
+            supplier_id = str(s.id)
+            resolved_supplier_name = s.name
+        # Try by supplier_code column (supplier mr)
+        if not supplier_id and supplier_code and supplier_code.lower() in suppliers_by_code:
+            s = suppliers_by_code[supplier_code.lower()]
+            supplier_id = str(s.id)
+            resolved_supplier_name = s.name
+
+        # Resolve account (optional)
+        account_id = None
+        if account_code and account_code in accounts_by_code:
+            account_id = str(accounts_by_code[account_code].id)
+
+        # Resolve tax code (optional)
+        tax_code_id = None
+        if tax_code and tax_code.lower() in tax_codes_by_code:
+            tax_code_id = str(tax_codes_by_code[tax_code.lower()].id)
+
+        # Validate amount format only
+        try:
+            float(amount) if amount else 0
+        except ValueError:
+            errors.append(f"Invalid amount: {amount}")
+
+        # Build description from booking_ref + traveler + travel_date
+        desc_parts = []
+        if document_type:
+            desc_parts.append(document_type)
+        if booking_ref:
+            desc_parts.append(booking_ref)
+        if traveler:
+            desc_parts.append(traveler)
+        if travel_date:
+            desc_parts.append(f"Travel: {travel_date}")
+        description = " | ".join(desc_parts) if desc_parts else supplier_name
+
+        row_status = "new"
+        if errors:
+            row_status = "error"
+        elif document_no and document_no in existing_doc_nos:
+            row_status = "duplicate"
+
+        rows.append({
+            "row_number": i,
+            "status": row_status,
+            "errors": errors,
+            "data": {
+                "supplier": resolved_supplier_name,
+                "supplier_id": supplier_id or "",
+                "document_type": document_type,
+                "document_no": document_no,
+                "booking_ref": booking_ref,
+                "traveler": traveler,
+                "travel_date": travel_date,
+                "invoice_date": invoice_date,
+                "due_date": due_date or invoice_date,
+                "currency": currency,
+                "amount": amount or "0",
+                "account": account_code,
+                "account_id": account_id or "",
+                "tax_code": tax_code,
+                "tax_code_id": tax_code_id or "",
+                "status": bill_status,
+                "notes": notes,
+                "description": description,
+            },
+        })
+
+    summary = {
+        "new": sum(1 for r in rows if r["status"] == "new"),
+        "duplicate": sum(1 for r in rows if r["status"] == "duplicate"),
+        "error": sum(1 for r in rows if r["status"] == "error"),
+        "total": len(rows),
+    }
+
+    return Response({"success": True, "rows": rows, "summary": summary})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bills_import_confirm(request):
+    """Create bills from previewed rows. Each row = one bill with one line."""
+    import datetime as dt
+
+    rows = request.data.get("rows", [])
+    update_existing = request.data.get("update_existing", False)
+
+    from core.models import TaxCode
+
+    created_by = (
+        f"{request.user.first_name} {request.user.last_name}".strip()
+        or request.user.username
+    )
+
+    today = dt.date.today().isoformat()
+
+    def _clean_date(val):
+        """Normalise a date value to YYYY-MM-DD or return today."""
+        if not val:
+            return today
+        s = str(val).strip()
+        if not s:
+            return today
+        # Strip time portion: "2026-05-20 00:00:00" → "2026-05-20"
+        s = s.split(" ")[0].split("T")[0]
+        # Validate it looks like a date
+        try:
+            dt.date.fromisoformat(s)
+            return s
+        except ValueError:
+            return today
+
+    try:
+        created = 0
+        updated = 0
+        errors = []
+
+        for r in rows:
+            if r.get("status") == "error":
+                continue
+            if r.get("status") == "duplicate" and not update_existing:
+                continue
+
+            data = r.get("data", {})
+            supplier_id = data.get("supplier_id")
+
+            supplier = None
+            if supplier_id:
+                try:
+                    supplier = Supplier.objects.get(id=supplier_id)
+                except Supplier.DoesNotExist:
+                    pass
+
+            invoice_date = _clean_date(data.get("invoice_date"))
+            due_date = _clean_date(data.get("due_date")) or invoice_date
+            document_no = (data.get("document_no") or "").strip()
+            currency = (data.get("currency") or "MAD").strip() or "MAD"
+            notes = (data.get("notes") or "").strip()
+            description = (data.get("description") or "").strip()
+
+            try:
+                amt = Decimal(str(data.get("amount", 0) or 0))
+            except (InvalidOperation, TypeError):
+                amt = Decimal("0")
+
+            # Resolve tax
+            tc = None
+            tax_amt = Decimal("0")
+            if data.get("tax_code_id"):
+                try:
+                    tc = TaxCode.objects.get(id=data["tax_code_id"])
+                    tax_amt = amt * tc.rate / Decimal("100")
+                except TaxCode.DoesNotExist:
+                    pass
+
+            account_id = data.get("account_id") or None
+
+            try:
+                bill = Bill.objects.create(
+                    bill_number=_next_bill_number(),
+                    supplier=supplier,
+                    date=invoice_date,
+                    due_date=due_date,
+                    status="draft",
+                    currency=currency,
+                    reference=document_no,
+                    notes=notes,
+                    subtotal=amt,
+                    tax_amount=tax_amt,
+                    total=amt + tax_amt,
+                    created_by=created_by,
+                )
+
+                BillLine.objects.create(
+                    bill=bill,
+                    description=description,
+                    quantity=Decimal("1"),
+                    unit_price=amt,
+                    tax_code=tc,
+                    account_id=account_id,
+                )
+
+                created += 1
+            except Exception as e:
+                errors.append(f"Row {r.get('row_number', '?')}: {str(e)}")
+
+        return Response({
+            "success": True,
+            "created": created,
+            "updated": updated,
+            "errors": errors,
+        })
+    except Exception as e:
+        return Response(
+            {"success": False, "message": f"Import error: {str(e)}"},
+            status=400,
+        )

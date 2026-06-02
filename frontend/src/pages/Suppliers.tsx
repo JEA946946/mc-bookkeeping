@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
-  Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
+  Autocomplete, Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, MenuItem, Chip, Tooltip, CircularProgress, Alert,
-  InputAdornment,
+  InputAdornment, TablePagination,
 } from '@mui/material';
 import {
   Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon,
@@ -16,6 +17,13 @@ import { useTranslation } from 'react-i18next';
 import api from '../services/api';
 import { exportToCSV } from '../utils/csvExport';
 import ImportDialog from '../components/ImportDialog';
+import PlacesAutocomplete, { PlaceResult } from '../components/PlacesAutocomplete';
+
+interface Account {
+  id: string;
+  code: string;
+  name: string;
+}
 
 interface Supplier {
   id: string;
@@ -28,6 +36,7 @@ interface Supplier {
   currency: string;
   payment_terms: string;
   notes: string;
+  default_account_id: string | null;
   is_active: boolean;
 }
 
@@ -66,8 +75,30 @@ const Suppliers: React.FC = () => {
   const { t, i18n } = useTranslation();
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Supplier | null>(null);
+
+  // Search & pagination
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(25);
+
+  const filteredSuppliers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return suppliers;
+    return suppliers.filter(s =>
+      s.name.toLowerCase().includes(q) ||
+      s.code.toLowerCase().includes(q) ||
+      (s.email && s.email.toLowerCase().includes(q)) ||
+      (s.phone && s.phone.includes(q))
+    );
+  }, [suppliers, search]);
+
+  const paginatedSuppliers = useMemo(
+    () => filteredSuppliers.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage),
+    [filteredSuppliers, page, rowsPerPage],
+  );
 
   // Statement dialog state
   const [statementOpen, setStatementOpen] = useState(false);
@@ -87,6 +118,7 @@ const Suppliers: React.FC = () => {
     currency: 'MAD',
     payment_terms: '',
     notes: '',
+    default_account_id: '',
   });
 
   const fetchSuppliers = () => {
@@ -95,7 +127,13 @@ const Suppliers: React.FC = () => {
     });
   };
 
-  useEffect(() => { fetchSuppliers(); }, []);
+  const fetchAccounts = () => {
+    api.get('/accounts?is_active=true').then(res => {
+      if (res.data.success) setAccounts(res.data.data.accounts);
+    });
+  };
+
+  useEffect(() => { fetchSuppliers(); fetchAccounts(); }, []);
 
   const handleOpen = (supplier?: Supplier) => {
     if (supplier) {
@@ -110,6 +148,7 @@ const Suppliers: React.FC = () => {
         currency: supplier.currency || 'MAD',
         payment_terms: supplier.payment_terms || '',
         notes: supplier.notes || '',
+        default_account_id: supplier.default_account_id || '',
       });
     } else {
       setEditing(null);
@@ -123,6 +162,7 @@ const Suppliers: React.FC = () => {
         currency: 'MAD',
         payment_terms: '',
         notes: '',
+        default_account_id: '',
       });
     }
     setDialogOpen(true);
@@ -223,7 +263,7 @@ const Suppliers: React.FC = () => {
     setCmrSearch('');
     setDebouncedCmrSearch('');
     setCmrLoading(true);
-    api.get('/cmr/suppliers').then(res => {
+    api.get('/cmr/suppliers', { timeout: 60000 }).then(res => {
       if (res.data.success) setCmrSuppliers(res.data.data.suppliers);
     }).catch((err: any) => {
       setCmrError(err.response?.data?.message || t('suppliers.cmrFetchError'));
@@ -243,8 +283,34 @@ const Suppliers: React.FC = () => {
       currency: 'MAD',
       payment_terms: '',
       notes: '',
+      default_account_id: '',
     });
     setDialogOpen(true);
+  };
+
+  const [cmrImporting, setCmrImporting] = useState(false);
+  const [cmrImportResult, setCmrImportResult] = useState<{ created: number; skipped: number } | null>(null);
+
+  const handleCmrImportAll = async () => {
+    const toImport = cmrSuppliers.filter(s => !s.already_imported);
+    if (toImport.length === 0) return;
+    setCmrImporting(true);
+    setCmrImportResult(null);
+    try {
+      const res = await api.post('/suppliers/import/cmr-bulk', { suppliers: toImport }, { timeout: 120000 });
+      if (res.data.success) {
+        setCmrImportResult({ created: res.data.created, skipped: res.data.skipped });
+        fetchSuppliers();
+        // Re-fetch CMR list to update already_imported flags
+        api.get('/cmr/suppliers', { timeout: 60000 }).then(r => {
+          if (r.data.success) setCmrSuppliers(r.data.data.suppliers);
+        });
+      }
+    } catch (err: any) {
+      setCmrError(err.response?.data?.message || t('suppliers.cmrFetchError'));
+    } finally {
+      setCmrImporting(false);
+    }
   };
 
   // Import/Export
@@ -279,6 +345,21 @@ const Suppliers: React.FC = () => {
         </Box>
       </Box>
 
+      <TextField
+        label={t('common.search')}
+        value={search}
+        size="small"
+        sx={{ mb: 1, width: 300 }}
+        onChange={e => { setSearch(e.target.value); setPage(0); }}
+        InputProps={{
+          endAdornment: (
+            <InputAdornment position="end">
+              <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+            </InputAdornment>
+          ),
+        }}
+      />
+
       <TableContainer component={Paper}>
         <Table size="small">
           <TableHead>
@@ -294,7 +375,7 @@ const Suppliers: React.FC = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {suppliers.map(supplier => (
+            {paginatedSuppliers.map(supplier => (
               <TableRow key={supplier.id} hover sx={{ opacity: supplier.is_active ? 1 : 0.5 }}>
                 <TableCell>
                   <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
@@ -337,7 +418,7 @@ const Suppliers: React.FC = () => {
                 </TableCell>
               </TableRow>
             ))}
-            {suppliers.length === 0 && (
+            {paginatedSuppliers.length === 0 && (
               <TableRow>
                 <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
                   <Typography variant="body2" color="text.secondary">{t('suppliers.noSuppliers')}</Typography>
@@ -346,6 +427,15 @@ const Suppliers: React.FC = () => {
             )}
           </TableBody>
         </Table>
+        <TablePagination
+          component="div"
+          count={filteredSuppliers.length}
+          page={page}
+          onPageChange={(_, p) => setPage(p)}
+          rowsPerPage={rowsPerPage}
+          onRowsPerPageChange={e => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+          rowsPerPageOptions={[25, 50, 100]}
+        />
       </TableContainer>
 
       {/* Add/Edit Dialog */}
@@ -358,9 +448,19 @@ const Suppliers: React.FC = () => {
                 label={t('common.code')} value={form.code} size="small" sx={{ width: 120 }}
                 onChange={e => setForm({ ...form, code: e.target.value })}
               />
-              <TextField
-                label={t('common.name')} value={form.name} size="small" fullWidth
-                onChange={e => setForm({ ...form, name: e.target.value })}
+              <PlacesAutocomplete
+                value={form.name}
+                onChange={(val) => setForm({ ...form, name: val })}
+                onPlaceSelect={(place: PlaceResult) => {
+                  setForm(prev => ({
+                    ...prev,
+                    name: place.name || prev.name,
+                    address: place.address || prev.address,
+                    phone: place.phone || prev.phone,
+                  }));
+                }}
+                label={t('common.name')}
+                sx={{ flex: 1 }}
               />
             </Box>
             <Box sx={{ display: 'flex', gap: 2 }}>
@@ -396,6 +496,16 @@ const Suppliers: React.FC = () => {
               label={t('suppliers.paymentTerms')} value={form.payment_terms} size="small" fullWidth
               onChange={e => setForm({ ...form, payment_terms: e.target.value })}
               placeholder={t('suppliers.paymentTermsPlaceholder')}
+            />
+            <Autocomplete
+              options={accounts}
+              getOptionLabel={(a) => `${a.code} — ${a.name}`}
+              value={accounts.find(a => a.id === form.default_account_id) || null}
+              onChange={(_, v) => setForm({ ...form, default_account_id: v?.id || '' })}
+              renderInput={(params) => (
+                <TextField {...params} label={t('suppliers.defaultAccount')} size="small" />
+              )}
+              size="small"
             />
             <TextField
               label={t('common.notes')} value={form.notes} size="small" fullWidth multiline rows={2}
@@ -447,7 +557,7 @@ const Suppliers: React.FC = () => {
               <TableBody>
                 {statementData?.lines?.map((line) => (
                   <TableRow key={line.id} hover>
-                    <TableCell>{line.date}</TableCell>
+                    <TableCell>{formatDate(line.date)}</TableCell>
                     <TableCell>
                       <Chip
                         label={line.type === 'bill' ? t('common.bill') : t('common.payment')}
@@ -514,10 +624,15 @@ const Suppliers: React.FC = () => {
       />
 
       {/* CMR Supplier Picker Dialog */}
-      <Dialog open={cmrOpen} onClose={() => setCmrOpen(false)} maxWidth="md" fullWidth>
+      <Dialog open={cmrOpen} onClose={() => { setCmrOpen(false); setCmrImportResult(null); }} maxWidth="md" fullWidth>
         <DialogTitle>{t('suppliers.cmrPickerTitle')}</DialogTitle>
         <DialogContent>
           {cmrError && <Alert severity="error" sx={{ mb: 2 }}>{cmrError}</Alert>}
+          {cmrImportResult && (
+            <Alert severity="success" sx={{ mb: 2 }}>
+              {t('suppliers.cmrBulkResult', { created: cmrImportResult.created, skipped: cmrImportResult.skipped })}
+            </Alert>
+          )}
           <TextField
             label={t('common.search')}
             value={cmrSearch}
@@ -603,7 +718,18 @@ const Suppliers: React.FC = () => {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCmrOpen(false)}>{t('common.close')}</Button>
+          <Button onClick={() => { setCmrOpen(false); setCmrImportResult(null); }}>{t('common.close')}</Button>
+          <Button
+            variant="contained"
+            onClick={handleCmrImportAll}
+            disabled={cmrImporting || cmrLoading || cmrSuppliers.filter(s => !s.already_imported).length === 0}
+            sx={{ bgcolor: '#2e7d32' }}
+          >
+            {cmrImporting
+              ? t('common.loading')
+              : t('suppliers.importAllCmr', { count: cmrSuppliers.filter(s => !s.already_imported).length })
+            }
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

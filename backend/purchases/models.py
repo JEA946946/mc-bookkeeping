@@ -20,6 +20,10 @@ class Supplier(models.Model):
     currency = models.CharField(max_length=3, default="MAD")
     payment_terms = models.IntegerField(default=30, help_text="Days until due")
     notes = models.TextField(blank=True, default="")
+    default_account = models.ForeignKey(
+        Account, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="default_suppliers",
+    )
     cmr_id = models.CharField(max_length=36, blank=True, default="", db_index=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -46,7 +50,7 @@ class Bill(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     bill_number = models.CharField(max_length=50)
     supplier = models.ForeignKey(
-        Supplier, on_delete=models.PROTECT, related_name="bills"
+        Supplier, on_delete=models.PROTECT, null=True, blank=True, related_name="bills"
     )
     date = models.DateField()
     due_date = models.DateField()
@@ -56,6 +60,10 @@ class Bill(models.Model):
     total = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     paid_amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     currency = models.CharField(max_length=3, default="MAD")
+    vat_quarter = models.IntegerField(
+        default=1, choices=[(1, "Q1"), (2, "Q2"), (3, "Q3"), (4, "Q4")]
+    )
+    vat_year = models.IntegerField(default=2025)
     reference = models.CharField(max_length=200, blank=True, default="")
     notes = models.TextField(blank=True, default="")
     journal_entry = models.ForeignKey(
@@ -74,7 +82,7 @@ class Bill(models.Model):
         ordering = ["-date", "-bill_number"]
 
     def __str__(self):
-        return f"{self.bill_number} — {self.supplier.name}"
+        return f"{self.bill_number} — {self.supplier.name if self.supplier else '—'}"
 
     @property
     def balance_due(self):
@@ -97,7 +105,7 @@ class BillLine(models.Model):
         related_name="bill_lines",
     )
     account = models.ForeignKey(
-        Account, on_delete=models.PROTECT, related_name="bill_lines"
+        Account, on_delete=models.PROTECT, null=True, blank=True, related_name="bill_lines"
     )
     amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
 

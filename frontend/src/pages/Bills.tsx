@@ -1,23 +1,29 @@
 import React, { useEffect, useState } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, MenuItem, Chip, Tooltip, TablePagination,
+  Autocomplete, InputAdornment, Checkbox, FormControlLabel,
 } from '@mui/material';
 import {
   Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon,
   RemoveRedEye as ViewIcon, CheckCircle as ApproveIcon,
   AddCircleOutline as AddLineIcon, RemoveCircleOutline as RemoveLineIcon,
-  Download as DownloadIcon,
+  Download as DownloadIcon, Upload as UploadIcon,
+  Search as SearchIcon, Clear as ClearIcon,
+  ArrowUpward as ArrowUpIcon, ArrowDownward as ArrowDownIcon,
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import api from '../services/api';
 import { downloadBlob } from '../utils/csvExport';
+import BillImportDialog from '../components/BillImportDialog';
 
 interface Supplier {
   id: string;
   code: string;
   name: string;
+  default_account_id?: string | null;
 }
 
 interface Account {
@@ -57,7 +63,10 @@ interface Bill {
   tax_amount: string;
   total: string;
   amount_paid: string;
+  vat_quarter?: number;
+  vat_year?: number;
   lines?: BillLine[];
+  line_account_codes?: string[];
 }
 
 const STATUS_COLORS: Record<string, 'default' | 'primary' | 'success' | 'error'> = {
@@ -93,6 +102,7 @@ const Bills: React.FC = () => {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [editing, setEditing] = useState<Bill | null>(null);
   const [viewing, setViewing] = useState<Bill | null>(null);
 
@@ -101,6 +111,18 @@ const Bills: React.FC = () => {
   const [filterSupplier, setFilterSupplier] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterSearch, setFilterSearch] = useState('');
+  const [filterAmountMin, setFilterAmountMin] = useState('');
+  const [filterAmountMax, setFilterAmountMax] = useState('');
+  const [filterOverdue, setFilterOverdue] = useState(false);
+  const [filterNoSupplier, setFilterNoSupplier] = useState(false);
+  const [filterHasSupplier, setFilterHasSupplier] = useState(false);
+  const [filterVatQuarter, setFilterVatQuarter] = useState('');
+  const [filterVatYear, setFilterVatYear] = useState('');
+
+  // Sort state
+  const [sortField, setSortField] = useState('date');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   // Pagination state
   const [page, setPage] = useState(0);
@@ -114,15 +136,32 @@ const Bills: React.FC = () => {
     due_date: '',
     reference: '',
     notes: '',
+    vat_quarter: '1',
+    vat_year: String(new Date().getFullYear()),
   });
   const [lines, setLines] = useState<BillLine[]>([{ ...EMPTY_LINE }]);
 
-  const fetchBills = (p?: number) => {
+  const buildFilterParams = () => {
     const params = new URLSearchParams();
+    if (filterSearch) params.set('search', filterSearch);
     if (filterStatus) params.set('status', filterStatus);
     if (filterSupplier) params.set('supplier_id', filterSupplier);
     if (filterDateFrom) params.set('date_from', filterDateFrom);
     if (filterDateTo) params.set('date_to', filterDateTo);
+    if (filterAmountMin) params.set('amount_min', filterAmountMin);
+    if (filterAmountMax) params.set('amount_max', filterAmountMax);
+    if (filterOverdue) params.set('overdue', 'true');
+    if (filterNoSupplier) params.set('no_supplier', 'true');
+    if (filterHasSupplier) params.set('has_supplier', 'true');
+    if (filterVatQuarter) params.set('vat_quarter', filterVatQuarter);
+    if (filterVatYear) params.set('vat_year', filterVatYear);
+    if (sortField) params.set('sort', sortField);
+    if (sortDir) params.set('sort_dir', sortDir);
+    return params;
+  };
+
+  const fetchBills = (p?: number) => {
+    const params = buildFilterParams();
     const currentPage = p !== undefined ? p : page;
     params.set('page', String(currentPage + 1));
     params.set('page_size', String(rowsPerPage));
@@ -157,12 +196,70 @@ const Bills: React.FC = () => {
     fetchBills(0);
   };
 
-  const handleExportBills = async () => {
+  const handleSort = (field: string) => {
+    const newDir = sortField === field && sortDir === 'desc' ? 'asc' : 'desc';
+    setSortField(field);
+    setSortDir(newDir);
+    // Fetch immediately with new sort (state is async, so build params manually)
+    const params = buildFilterParams();
+    params.set('sort', field);
+    params.set('sort_dir', newDir);
+    params.set('page', '1');
+    params.set('page_size', String(rowsPerPage));
+    api.get(`/bills?${params.toString()}`).then(res => {
+      if (res.data.success) {
+        setBills(res.data.data.bills);
+        setTotalCount(res.data.data.total_count ?? res.data.data.count ?? 0);
+      }
+    });
+    setPage(0);
+  };
+
+  const SortHeader = ({ field, label, align }: { field: string; label: string; align?: 'right' }) => (
+    <TableCell
+      align={align}
+      sx={{ fontWeight: 600, cursor: 'pointer', userSelect: 'none', '&:hover': { bgcolor: '#e0e0e0' } }}
+      onClick={() => handleSort(field)}
+    >
+      <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+        {label}
+        {sortField === field ? (
+          sortDir === 'desc' ? <ArrowDownIcon sx={{ fontSize: 14 }} /> : <ArrowUpIcon sx={{ fontSize: 14 }} />
+        ) : null}
+      </Box>
+    </TableCell>
+  );
+
+  const handleResetFilters = () => {
+    setFilterSearch('');
+    setFilterStatus('');
+    setFilterSupplier('');
+    setFilterDateFrom('');
+    setFilterDateTo('');
+    setFilterAmountMin('');
+    setFilterAmountMax('');
+    setFilterOverdue(false);
+    setFilterNoSupplier(false);
+    setFilterHasSupplier(false);
+    setFilterVatQuarter('');
+    setFilterVatYear('');
+    setSortField('date');
+    setSortDir('desc');
+    setPage(0);
+    // Fetch with empty filters directly since state updates are async
     const params = new URLSearchParams();
-    if (filterStatus) params.set('status', filterStatus);
-    if (filterSupplier) params.set('supplier_id', filterSupplier);
-    if (filterDateFrom) params.set('date_from', filterDateFrom);
-    if (filterDateTo) params.set('date_to', filterDateTo);
+    params.set('page', '1');
+    params.set('page_size', String(rowsPerPage));
+    api.get(`/bills?${params.toString()}`).then(res => {
+      if (res.data.success) {
+        setBills(res.data.data.bills);
+        setTotalCount(res.data.data.total_count ?? res.data.data.count ?? 0);
+      }
+    });
+  };
+
+  const handleExportBills = async () => {
+    const params = buildFilterParams();
     const qs = params.toString() ? `?${params.toString()}` : '';
     try {
       const res = await api.get(`/bills/export${qs}`, { responseType: 'blob' });
@@ -194,34 +291,49 @@ const Bills: React.FC = () => {
       if (res.data.success) {
         const full = res.data.data.bill;
         setEditing(full);
+        const billLines = full.lines && full.lines.length > 0
+          ? full.lines.map((l: BillLine) => ({
+              description: l.description,
+              quantity: l.quantity,
+              unit_price: l.unit_price,
+              account_id: l.account_id || '',
+              tax_code_id: l.tax_code_id || '',
+              amount: l.amount,
+            }))
+          : [{ ...EMPTY_LINE }];
+        // Auto-detect supplier from line accounts if not set
+        let supplierId = full.supplier_id || '';
+        if (!supplierId && billLines.length > 0) {
+          for (const line of billLines) {
+            if (line.account_id) {
+              const matched = suppliers.find(s => s.default_account_id === line.account_id);
+              if (matched) { supplierId = matched.id; break; }
+            }
+          }
+        }
         setForm({
-          supplier_id: full.supplier_id,
+          supplier_id: supplierId,
           date: full.date,
           due_date: full.due_date,
           reference: full.reference || '',
           notes: full.notes || '',
+          vat_quarter: String(full.vat_quarter ?? 1),
+          vat_year: String(full.vat_year ?? new Date().getFullYear()),
         });
-        setLines(
-          full.lines && full.lines.length > 0
-            ? full.lines.map((l: BillLine) => ({
-                description: l.description,
-                quantity: l.quantity,
-                unit_price: l.unit_price,
-                account_id: l.account_id,
-                tax_code_id: l.tax_code_id || '',
-                amount: l.amount,
-              }))
-            : [{ ...EMPTY_LINE }]
-        );
+        setLines(billLines);
       }
     } else {
       setEditing(null);
+      const today = new Date();
+      const autoQuarter = Math.floor(today.getMonth() / 3) + 1;
       setForm({
         supplier_id: '',
-        date: new Date().toISOString().split('T')[0],
+        date: today.toISOString().split('T')[0],
         due_date: '',
         reference: '',
         notes: '',
+        vat_quarter: String(autoQuarter),
+        vat_year: String(today.getFullYear()),
       });
       setLines([{ ...EMPTY_LINE }]);
     }
@@ -239,6 +351,8 @@ const Bills: React.FC = () => {
   const handleSave = async () => {
     const payload = {
       ...form,
+      vat_quarter: parseInt(form.vat_quarter, 10),
+      vat_year: parseInt(form.vat_year, 10),
       lines: lines.filter(l => l.description || l.account_id),
     };
     try {
@@ -274,6 +388,21 @@ const Bills: React.FC = () => {
     }
   };
 
+  const handleBulkApprove = async () => {
+    const draftBills = bills.filter(b => b.status === 'draft');
+    if (!draftBills.length) return;
+    if (!window.confirm(t('bills.bulkApproveConfirm', { count: draftBills.length }))) return;
+    try {
+      const res = await api.post('/bills/bulk-approve', { bill_ids: draftBills.map(b => b.id) });
+      if (res.data.success) {
+        alert(t('bills.bulkApproveSuccess', { count: res.data.approved_count }));
+        fetchBills();
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.message || t('bills.errorApproving'));
+    }
+  };
+
   const updateLine = (index: number, field: keyof BillLine, value: string) => {
     setLines(prev =>
       prev.map((l, i) => {
@@ -285,6 +414,13 @@ const Bills: React.FC = () => {
         return updated;
       })
     );
+    // Auto-fill supplier when account changes and no supplier is set
+    if (field === 'account_id' && value && !form.supplier_id) {
+      const matched = suppliers.find(s => s.default_account_id === value);
+      if (matched) {
+        setForm(prev => ({ ...prev, supplier_id: matched.id }));
+      }
+    }
   };
 
   const addLine = () => setLines(prev => [...prev, { ...EMPTY_LINE }]);
@@ -309,8 +445,16 @@ const Bills: React.FC = () => {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h5" sx={{ fontWeight: 600 }}>{t('bills.title')}</Typography>
         <Box sx={{ display: 'flex', gap: 1 }}>
+          {filterHasSupplier && filterStatus === 'draft' && (
+            <Button variant="contained" color="primary" startIcon={<ApproveIcon />} onClick={handleBulkApprove} size="small">
+              {t('bills.bulkApprove')}
+            </Button>
+          )}
           <Button variant="outlined" startIcon={<DownloadIcon />} onClick={handleExportBills} size="small">
             {t('importExport.export')}
+          </Button>
+          <Button variant="outlined" startIcon={<UploadIcon />} onClick={() => setImportOpen(true)} size="small">
+            {t('importExport.import')}
           </Button>
           <Button variant="contained" startIcon={<AddIcon />} onClick={() => handleOpen()} sx={{ bgcolor: '#2e7d32' }}>
             {t('bills.newBill')}
@@ -320,6 +464,21 @@ const Bills: React.FC = () => {
 
       {/* Filter Bar */}
       <Paper sx={{ p: 1.5, mb: 2, display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+        <TextField
+          label={t('common.search')}
+          value={filterSearch}
+          size="small"
+          sx={{ width: 200 }}
+          onChange={e => setFilterSearch(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleApplyFilters(); }}
+          InputProps={{
+            endAdornment: (
+              <InputAdornment position="end">
+                <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+              </InputAdornment>
+            ),
+          }}
+        />
         <TextField
           select label={t('common.status')} value={filterStatus} size="small"
           onChange={e => setFilterStatus(e.target.value)}
@@ -331,16 +490,17 @@ const Bills: React.FC = () => {
           <MenuItem value="paid">{t('bills.paid')}</MenuItem>
           <MenuItem value="overdue">{t('bills.overdue')}</MenuItem>
         </TextField>
-        <TextField
-          select label={t('bills.supplier')} value={filterSupplier} size="small"
-          onChange={e => setFilterSupplier(e.target.value)}
-          sx={{ width: 200 }}
-        >
-          <MenuItem value="">{t('bills.allSuppliers')}</MenuItem>
-          {suppliers.map(s => (
-            <MenuItem key={s.id} value={s.id}>{s.code} — {s.name}</MenuItem>
-          ))}
-        </TextField>
+        <Autocomplete
+          options={suppliers}
+          getOptionLabel={(s) => `${s.code} — ${s.name}`}
+          value={suppliers.find(s => s.id === filterSupplier) || null}
+          onChange={(_, v) => setFilterSupplier(v?.id || '')}
+          renderInput={(params) => (
+            <TextField {...params} label={t('bills.supplier')} size="small" />
+          )}
+          sx={{ width: 250 }}
+          size="small"
+        />
         <TextField
           label={t('common.from')} type="date" value={filterDateFrom} size="small"
           onChange={e => setFilterDateFrom(e.target.value)}
@@ -351,8 +511,57 @@ const Bills: React.FC = () => {
           onChange={e => setFilterDateTo(e.target.value)}
           InputLabelProps={{ shrink: true }} sx={{ width: 140 }}
         />
+        <TextField
+          label={t('bills.amountMin')} type="number" value={filterAmountMin} size="small"
+          onChange={e => setFilterAmountMin(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleApplyFilters(); }}
+          sx={{ width: 120 }}
+          inputProps={{ min: 0, step: '0.01' }}
+        />
+        <TextField
+          label={t('bills.amountMax')} type="number" value={filterAmountMax} size="small"
+          onChange={e => setFilterAmountMax(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleApplyFilters(); }}
+          sx={{ width: 120 }}
+          inputProps={{ min: 0, step: '0.01' }}
+        />
+        <TextField
+          select label={t('bills.vatQuarter')} value={filterVatQuarter} size="small"
+          onChange={e => setFilterVatQuarter(e.target.value)}
+          sx={{ width: 100 }}
+        >
+          <MenuItem value="">{t('common.all')}</MenuItem>
+          <MenuItem value="1">Q1</MenuItem>
+          <MenuItem value="2">Q2</MenuItem>
+          <MenuItem value="3">Q3</MenuItem>
+          <MenuItem value="4">Q4</MenuItem>
+        </TextField>
+        <TextField
+          label={t('bills.vatYear')} type="number" value={filterVatYear} size="small"
+          onChange={e => setFilterVatYear(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleApplyFilters(); }}
+          sx={{ width: 90 }}
+        />
+        <FormControlLabel
+          control={<Checkbox size="small" checked={filterOverdue} onChange={e => setFilterOverdue(e.target.checked)} />}
+          label={<Typography variant="body2">{t('bills.overdueOnly')}</Typography>}
+          sx={{ mr: 0 }}
+        />
+        <FormControlLabel
+          control={<Checkbox size="small" checked={filterNoSupplier} onChange={e => { setFilterNoSupplier(e.target.checked); if (e.target.checked) setFilterHasSupplier(false); }} />}
+          label={<Typography variant="body2">{t('bills.noSupplierOnly')}</Typography>}
+          sx={{ mr: 0 }}
+        />
+        <FormControlLabel
+          control={<Checkbox size="small" checked={filterHasSupplier} onChange={e => { setFilterHasSupplier(e.target.checked); if (e.target.checked) setFilterNoSupplier(false); }} />}
+          label={<Typography variant="body2">{t('bills.hasSupplierOnly')}</Typography>}
+          sx={{ mr: 0 }}
+        />
         <Button variant="outlined" size="small" onClick={handleApplyFilters}>
           {t('common.apply')}
+        </Button>
+        <Button variant="outlined" size="small" color="secondary" startIcon={<ClearIcon />} onClick={handleResetFilters}>
+          {t('bills.resetFilters')}
         </Button>
       </Paper>
 
@@ -360,29 +569,34 @@ const Bills: React.FC = () => {
         <Table size="small">
           <TableHead>
             <TableRow sx={{ bgcolor: '#f5f5f5' }}>
-              <TableCell sx={{ fontWeight: 600 }}>{t('bills.billNumber')}</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>{t('bills.supplier')}</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>{t('common.date')}</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>{t('bills.dueDate')}</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600 }}>{t('common.subtotal')}</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600 }}>{t('common.tax')}</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600 }}>{t('common.total')}</TableCell>
-              <TableCell align="right" sx={{ fontWeight: 600 }}>{t('bills.amountPaid')}</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>{t('common.status')}</TableCell>
+              <SortHeader field="bill_number" label={t('bills.billNumber')} />
+              <SortHeader field="supplier_name" label={t('bills.supplier')} />
+              <SortHeader field="date" label={t('common.date')} />
+              <SortHeader field="due_date" label={t('bills.dueDate')} />
+              <SortHeader field="subtotal" label={t('common.subtotal')} align="right" />
+              <SortHeader field="tax_amount" label={t('common.tax')} align="right" />
+              <SortHeader field="total" label={t('common.total')} align="right" />
+              <SortHeader field="paid_amount" label={t('bills.amountPaid')} align="right" />
+              <SortHeader field="status" label={t('common.status')} />
+              <SortHeader field="vat_quarter" label={t('bills.vatQuarter')} />
               <TableCell align="right" sx={{ fontWeight: 600 }}>{t('common.actions')}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {bills.map(bill => (
-              <TableRow key={bill.id} hover>
+              <TableRow key={bill.id} hover sx={bill.line_account_codes?.includes('513000') ? { bgcolor: '#e8f5e9' } : !bill.supplier_name ? { bgcolor: '#e3f2fd' } : undefined}>
                 <TableCell>
                   <Typography variant="body2" sx={{ fontFamily: 'monospace', fontWeight: 500 }}>
                     {bill.bill_number}
                   </Typography>
                 </TableCell>
-                <TableCell>{bill.supplier_name}</TableCell>
-                <TableCell>{bill.date}</TableCell>
-                <TableCell>{bill.due_date}</TableCell>
+                <TableCell>
+                  {bill.supplier_name || (
+                    <Chip label={t('bills.noSupplier')} size="small" color="warning" variant="outlined" sx={{ height: 20, fontSize: '11px' }} />
+                  )}
+                </TableCell>
+                <TableCell>{formatDate(bill.date)}</TableCell>
+                <TableCell>{formatDate(bill.due_date)}</TableCell>
                 <TableCell align="right">
                   {parseFloat(bill.subtotal).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}
                 </TableCell>
@@ -402,6 +616,11 @@ const Bills: React.FC = () => {
                     color={STATUS_COLORS[bill.status] || 'default'}
                     sx={{ height: 20, fontSize: '11px' }}
                   />
+                </TableCell>
+                <TableCell>
+                  <Typography variant="body2" sx={{ whiteSpace: 'nowrap' }}>
+                    Q{bill.vat_quarter} {bill.vat_year}
+                  </Typography>
                 </TableCell>
                 <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
                   <Tooltip title={t('common.view')}>
@@ -442,7 +661,7 @@ const Bills: React.FC = () => {
             ))}
             {bills.length === 0 && (
               <TableRow>
-                <TableCell colSpan={10} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={11} align="center" sx={{ py: 4 }}>
                   <Typography variant="body2" color="text.secondary">{t('bills.noBills')}</Typography>
                 </TableCell>
               </TableRow>
@@ -466,18 +685,37 @@ const Bills: React.FC = () => {
         <DialogTitle>{editing ? t('bills.editBill', { number: editing.bill_number }) : t('bills.newBill')}</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', gap: 2, mt: 1, mb: 2, flexWrap: 'wrap' }}>
-            <TextField
-              select label={t('bills.supplier')} value={form.supplier_id} size="small"
-              onChange={e => setForm({ ...form, supplier_id: e.target.value })}
-              sx={{ width: 250 }}
-            >
-              {suppliers.map(s => (
-                <MenuItem key={s.id} value={s.id}>{s.code} — {s.name}</MenuItem>
-              ))}
-            </TextField>
+            <Autocomplete
+              options={suppliers}
+              getOptionLabel={(s) => `${s.code} — ${s.name}`}
+              value={suppliers.find(s => s.id === form.supplier_id) || null}
+              onChange={(_, v) => {
+                setForm({ ...form, supplier_id: v?.id || '' });
+                // Auto-fill account on lines that don't have one yet
+                if (v?.default_account_id) {
+                  setLines(prev => prev.map(l =>
+                    l.account_id ? l : { ...l, account_id: v.default_account_id! }
+                  ));
+                }
+              }}
+              renderInput={(params) => (
+                <TextField {...params} label={t('bills.supplier')} size="small" />
+              )}
+              sx={{ width: 300 }}
+              size="small"
+            />
             <TextField
               label={t('common.date')} type="date" value={form.date} size="small"
-              onChange={e => setForm({ ...form, date: e.target.value })}
+              onChange={e => {
+                const val = e.target.value;
+                const d = new Date(val);
+                const updates: Record<string, string> = { date: val };
+                if (!isNaN(d.getTime())) {
+                  updates.vat_quarter = String(Math.floor(d.getMonth() / 3) + 1);
+                  updates.vat_year = String(d.getFullYear());
+                }
+                setForm(prev => ({ ...prev, ...updates }));
+              }}
               InputLabelProps={{ shrink: true }} sx={{ width: 160 }}
             />
             <TextField
@@ -488,6 +726,21 @@ const Bills: React.FC = () => {
             <TextField
               label={t('common.reference')} value={form.reference} size="small" sx={{ width: 180 }}
               onChange={e => setForm({ ...form, reference: e.target.value })}
+            />
+            <TextField
+              select label={t('bills.vatQuarter')} value={form.vat_quarter} size="small"
+              onChange={e => setForm({ ...form, vat_quarter: e.target.value })}
+              sx={{ width: 100 }}
+            >
+              <MenuItem value="1">Q1</MenuItem>
+              <MenuItem value="2">Q2</MenuItem>
+              <MenuItem value="3">Q3</MenuItem>
+              <MenuItem value="4">Q4</MenuItem>
+            </TextField>
+            <TextField
+              label={t('bills.vatYear')} value={form.vat_year} size="small" type="number"
+              onChange={e => setForm({ ...form, vat_year: e.target.value })}
+              sx={{ width: 90 }}
             />
           </Box>
           <TextField
@@ -623,8 +876,8 @@ const Bills: React.FC = () => {
         </DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', gap: 3, mb: 2, mt: 1 }}>
-            <Typography variant="body2"><strong>{t('common.date')}:</strong> {viewing?.date}</Typography>
-            <Typography variant="body2"><strong>{t('bills.dueDate')}:</strong> {viewing?.due_date}</Typography>
+            <Typography variant="body2"><strong>{t('common.date')}:</strong> {formatDate(viewing?.date)}</Typography>
+            <Typography variant="body2"><strong>{t('bills.dueDate')}:</strong> {formatDate(viewing?.due_date)}</Typography>
             {viewing?.reference && (
               <Typography variant="body2"><strong>{t('common.reference')}:</strong> {viewing.reference}</Typography>
             )}
@@ -656,6 +909,7 @@ const Bills: React.FC = () => {
                     </TableCell>
                     <TableCell>
                       {(() => {
+                        if (!line.account_id) return '—';
                         const acct = accounts.find(a => a.id === line.account_id);
                         return acct ? `${acct.code} — ${acct.name}` : line.account_id;
                       })()}
@@ -703,6 +957,13 @@ const Bills: React.FC = () => {
           <Button onClick={() => setViewDialogOpen(false)}>{t('common.close')}</Button>
         </DialogActions>
       </Dialog>
+
+      {/* Import Dialog */}
+      <BillImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onSuccess={() => fetchBills()}
+      />
     </Box>
   );
 };

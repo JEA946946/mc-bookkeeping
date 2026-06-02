@@ -42,4 +42,5 @@ urlpatterns = [
     path("settings", views.settings_detail, name="settings-detail"),
     path("users", views.users_list_create, name="users-list-create"),
     path("users/<int:pk>/role", views.user_role_update, name="user-role-update"),
+    path("users/<int:pk>/reset-password", views.user_reset_password, name="user-reset-password"),
 ]

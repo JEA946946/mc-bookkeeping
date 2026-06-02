@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
@@ -474,7 +475,7 @@ const Payments: React.FC = () => {
                     sx={{ height: 22, fontSize: '0.75rem', '& .MuiChip-label': { px: 0.8 } }}
                   />
                 </TableCell>
-                <TableCell>{payment.date}</TableCell>
+                <TableCell>{formatDate(payment.date)}</TableCell>
                 <TableCell align="right">
                   {formatAmount(payment.amount)} {payment.currency}
                 </TableCell>
@@ -692,7 +693,7 @@ const Payments: React.FC = () => {
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2, mb: 3 }}>
                 <Box>
                   <Typography variant="caption" color="text.secondary">{t('common.date')}</Typography>
-                  <Typography variant="body2">{viewing.date}</Typography>
+                  <Typography variant="body2">{formatDate(viewing.date)}</Typography>
                 </Box>
                 <Box>
                   <Typography variant="caption" color="text.secondary">{t('common.amount')}</Typography>
@@ -833,7 +834,7 @@ const Payments: React.FC = () => {
                     {openDocuments.map((doc, i) => (
                       <TableRow key={doc.id} hover>
                         <TableCell>{doc.reference}</TableCell>
-                        <TableCell>{doc.date}</TableCell>
+                        <TableCell>{formatDate(doc.date)}</TableCell>
                         <TableCell align="right">{formatAmount(doc.total)}</TableCell>
                         <TableCell align="right">{formatAmount(doc.balance_due)}</TableCell>
                         <TableCell align="right" sx={{ p: 0.5 }}>

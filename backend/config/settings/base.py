@@ -115,3 +115,9 @@ SIMPLE_JWT = {
 # CMR API integration
 CMR_API_BASE = "http://dmc_cmr_django_local_django:8000/api/v1"
 CMR_API_TOKEN = ""  # Set via env var
+
+# Google Places API
+GOOGLE_PLACES_API_KEY = ""
+
+# Default admin password (used for password resets)
+DEFAULT_ADMIN_PASSWORD = "Nima2001Fesoy1996@"

@@ -16,9 +16,9 @@ class CMRClient:
         self.token = token or getattr(settings, "CMR_API_TOKEN", "")
 
     def _headers(self):
-        headers = {"Accept": "application/json", "Host": "localhost"}
+        headers = {"Accept": "application/json", "Host": "crm.vmmorocco.com"}
         if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+            headers["X-API-Key"] = self.token
         return headers
 
     def get_finance_events(self, since):

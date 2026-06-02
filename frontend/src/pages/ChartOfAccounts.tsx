@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
@@ -371,7 +372,7 @@ const ChartOfAccounts: React.FC = () => {
               <TableBody>
                 {ledgerLines.map((line) => (
                   <TableRow key={line.id} hover>
-                    <TableCell>{line.date}</TableCell>
+                    <TableCell>{formatDate(line.date)}</TableCell>
                     <TableCell>
                       <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{line.entry_number}</Typography>
                     </TableCell>

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
@@ -112,7 +113,7 @@ const Documents: React.FC = () => {
             items = res.data.data?.journal_entries ?? res.data.journal_entries ?? [];
             setter(items.map((e: any) => ({
               id: e.id,
-              label: `${e.entry_number} — ${e.date} — ${e.description || ''}`,
+              label: `${e.entry_number} — ${formatDate(e.date)} — ${e.description || ''}`,
             })));
             break;
           case 'invoice':
@@ -258,14 +259,7 @@ const Documents: React.FC = () => {
     return doc.linked_label ? `${typeLabel}: ${doc.linked_label}` : typeLabel;
   };
 
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return '—';
-    try {
-      return new Date(dateStr).toLocaleDateString(i18n.language);
-    } catch {
-      return dateStr;
-    }
-  };
+  // formatDate imported from ../utils/dateFormat
 
   /* ======================== render ======================== */
 

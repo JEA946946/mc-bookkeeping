@@ -441,11 +441,11 @@ def bank_statement_upload(request):
             for row in reader:
                 # Map CSV columns (case-insensitive lookup)
                 cols = {k.strip().lower(): v for k, v in row.items()}
-                op_date = cols.get("operation date") or cols.get("date")
-                description = cols.get("detailed description") or cols.get("description") or ""
-                reference = cols.get("reference") or ""
-                debit = _safe_decimal(cols.get("debit"))
-                credit = _safe_decimal(cols.get("credit"))
+                op_date = cols.get("operation date") or cols.get("date") or cols.get("dt opération") or cols.get("dt operation")
+                description = cols.get("detailed description") or cols.get("description") or cols.get("libellé large") or cols.get("libelle large") or cols.get("libellé") or ""
+                reference = cols.get("reference") or cols.get("référence") or ""
+                debit = _safe_decimal(cols.get("debit") or cols.get("débit"))
+                credit = _safe_decimal(cols.get("credit") or cols.get("crédit"))
 
                 parsed_date = _parse_date(op_date)
                 if not parsed_date:
@@ -510,15 +510,15 @@ def bank_statement_upload(request):
             # Map column indices
             col_map = {}
             for i, h in enumerate(headers):
-                if h in ("operation date", "date"):
+                if h in ("operation date", "date", "dt opération", "dt operation"):
                     col_map["date"] = i
-                elif h in ("detailed description", "description"):
+                elif h in ("detailed description", "description", "libellé large", "libelle large", "libellé"):
                     col_map["description"] = i
-                elif h == "reference":
+                elif h in ("reference", "référence"):
                     col_map["reference"] = i
-                elif h == "debit":
+                elif h in ("debit", "débit"):
                     col_map["debit"] = i
-                elif h == "credit":
+                elif h in ("credit", "crédit"):
                     col_map["credit"] = i
                 elif h in ("account_code", "account code"):
                     col_map["account_code"] = i
@@ -901,21 +901,20 @@ def bank_statement_confirm(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Validate all account_ids
-    account_ids = [t.get("account_id") for t in txns]
-    if any(not aid for aid in account_ids):
-        return Response(
-            {"success": False, "message": "All transactions must have an account assigned"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    # Split into mapped (have account) and all (for upload history)
+    all_txns = txns
+    mapped_txns = [t for t in txns if t.get("account_id")]
 
-    accounts_map = {str(a.id): a for a in Account.objects.filter(id__in=account_ids)}
-    for aid in account_ids:
-        if aid not in accounts_map:
-            return Response(
-                {"success": False, "message": f"Account {aid} not found"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+    account_ids = [t.get("account_id") for t in mapped_txns]
+    accounts_map = {}
+    if account_ids:
+        accounts_map = {str(a.id): a for a in Account.objects.filter(id__in=account_ids)}
+        for aid in account_ids:
+            if aid not in accounts_map:
+                return Response(
+                    {"success": False, "message": f"Account {aid} not found"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
     # Client Funds Liability account — required for margin scheme
     try:
@@ -929,6 +928,14 @@ def bank_statement_confirm(request):
     created_by = f"{request.user.first_name} {request.user.last_name}".strip() or request.user.username
     currency = bank_account.currency  # EUR for 101003, MAD for others
     created = 0
+    skipped = 0
+
+    # Pre-load existing bank references for duplicate detection
+    existing_refs = set(
+        JournalEntry.objects.filter(source="bank")
+        .exclude(reference="")
+        .values_list("reference", flat=True)
+    )
 
     with transaction.atomic():
         for txn in txns:
@@ -939,6 +946,11 @@ def bank_statement_confirm(request):
 
             desc = txn.get("description", "Bank transaction")
             ref = txn.get("reference", "")
+
+            # Skip duplicates by reference
+            if ref and ref in existing_refs:
+                skipped += 1
+                continue
 
             entry = JournalEntry.objects.create(
                 entry_number=_next_entry_number(),
@@ -981,7 +993,7 @@ def bank_statement_confirm(request):
             created += 1
 
         # Save learned description→account mappings for future auto-map
-        for txn in txns:
+        for txn in mapped_txns:
             desc = txn.get("description", "")
             acct_id = txn.get("account_id")
             if not desc or not acct_id:
@@ -1004,24 +1016,23 @@ def bank_statement_confirm(request):
             )
 
     # Save upload history record
-    if created > 0:
-        dates = [t["date"] for t in txns if t.get("date")]
-        try:
-            BankStatementUpload.objects.create(
-                filename=data.get("filename", "bank_statement"),
-                bank_account=bank_account,
-                date_from=min(dates) if dates else None,
-                date_to=max(dates) if dates else None,
-                transaction_count=created,
-                uploaded_by=f"{request.user.first_name} {request.user.last_name}".strip() or request.user.username,
-            )
-        except Exception:
-            pass  # Don't fail the whole request if history save fails
+    dates = [t["date"] for t in all_txns if t.get("date")]
+    try:
+        BankStatementUpload.objects.create(
+            filename=data.get("filename", "bank_statement"),
+            bank_account=bank_account,
+            date_from=min(dates) if dates else None,
+            date_to=max(dates) if dates else None,
+            transaction_count=len(all_txns),
+            uploaded_by=f"{request.user.first_name} {request.user.last_name}".strip() or request.user.username,
+        )
+    except Exception:
+        pass  # Don't fail the whole request if history save fails
 
     return Response({
         "success": True,
-        "message": f"{created} journal entries created",
-        "data": {"count": created},
+        "message": f"{created} journal entries created, {skipped} duplicates skipped",
+        "data": {"count": created, "skipped": skipped},
     }, status=status.HTTP_201_CREATED)
 
 
@@ -1931,9 +1942,14 @@ def cmr_suppliers_list(request):
     results = []
     for sup in cmr_suppliers:
         name = sup.get("company_name") or sup.get("name") or ""
-        city = sup.get("city", "")
-        country = sup.get("country", "")
-        address = sup.get("address") or ", ".join(filter(None, [city, country]))
+        addr_parts = filter(None, [
+            sup.get("address_line1") or "",
+            sup.get("address_line2") or "",
+            sup.get("postal_code") or "",
+            sup.get("city") or "",
+            sup.get("country") or "",
+        ])
+        address = ", ".join(addr_parts)
         results.append({
             "id": sup.get("id", ""),
             "name": name,
@@ -1949,6 +1965,104 @@ def cmr_suppliers_list(request):
         "success": True,
         "data": {"suppliers": results},
     })
+
+
+# ─── Google Places API ─────────────────────────────────────────────────────────
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def places_autocomplete(request):
+    """Google Places Autocomplete (New API) — called directly."""
+    query = request.query_params.get("q", "").strip()
+    if not query or len(query) < 2:
+        return Response({"success": True, "data": {"predictions": []}})
+
+    from django.conf import settings
+    import requests as http_requests
+
+    api_key = settings.GOOGLE_PLACES_API_KEY
+    if not api_key:
+        return Response({"success": False, "message": "GOOGLE_PLACES_API_KEY not configured"}, status=500)
+
+    region = request.query_params.get("region", "").strip()
+    url = "https://places.googleapis.com/v1/places:autocomplete"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+    }
+    body = {"input": query, "languageCode": "en"}
+    if region:
+        body["includedRegionCodes"] = [region]
+
+    try:
+        resp = http_requests.post(url, json=body, headers=headers, timeout=5)
+        data = resp.json()
+        predictions = []
+        for s in data.get("suggestions", []):
+            p = s.get("placePrediction")
+            if p:
+                predictions.append({
+                    "place_id": p.get("placeId"),
+                    "description": p.get("text", {}).get("text", ""),
+                })
+        return Response({"success": True, "data": {"predictions": predictions}})
+    except Exception as e:
+        return Response({"success": False, "message": str(e)}, status=500)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def places_details(request):
+    """Google Places Details (New API) — called directly."""
+    place_id = request.query_params.get("place_id", "").strip()
+    if not place_id:
+        return Response({"success": False, "message": "place_id required"}, status=400)
+
+    from django.conf import settings
+    import requests as http_requests
+
+    api_key = settings.GOOGLE_PLACES_API_KEY
+    if not api_key:
+        return Response({"success": False, "message": "GOOGLE_PLACES_API_KEY not configured"}, status=500)
+
+    url = f"https://places.googleapis.com/v1/places/{place_id}"
+    headers = {
+        "X-Goog-Api-Key": api_key,
+        "X-Goog-FieldMask": "displayName,formattedAddress,internationalPhoneNumber,nationalPhoneNumber,addressComponents,websiteUri",
+    }
+    try:
+        resp = http_requests.get(url, headers=headers, timeout=5)
+        data = resp.json()
+
+        city = ""
+        country = ""
+        postal_code = ""
+        state = ""
+        for comp in data.get("addressComponents", []):
+            types = comp.get("types", [])
+            if "locality" in types:
+                city = comp.get("longText", "")
+            elif "country" in types:
+                country = comp.get("longText", "")
+            elif "postal_code" in types:
+                postal_code = comp.get("longText", "")
+            elif "administrative_area_level_1" in types:
+                state = comp.get("longText", "")
+
+        result = {
+            "name": data.get("displayName", {}).get("text", ""),
+            "address": data.get("formattedAddress", ""),
+            "phone": data.get("internationalPhoneNumber", "") or data.get("nationalPhoneNumber", ""),
+            "website": data.get("websiteUri", ""),
+            "city": city,
+            "country": country,
+            "postal_code": postal_code,
+            "state": state,
+        }
+        return Response({"success": True, "data": result})
+    except Exception as e:
+        return Response({"success": False, "message": str(e)}, status=500)
 
 
 # ─── CMR Invoice Import ───────────────────────────────────────────────────────
@@ -2232,6 +2346,23 @@ def _bank_txn_queryset(request):
             Q(journal_entry__description__icontains=q) |
             Q(journal_entry__reference__icontains=q)
         )
+
+    # Sorting
+    sort_field = request.query_params.get("sort", "date")
+    sort_dir = request.query_params.get("sort_dir", "desc")
+    allowed_sort = {
+        "date": "journal_entry__date",
+        "entry_number": "journal_entry__entry_number",
+        "description": "journal_entry__description",
+        "reference": "journal_entry__reference",
+        "bank_account": "account__code",
+        "debit": "debit",
+        "credit": "credit",
+    }
+    order_field = allowed_sort.get(sort_field, "journal_entry__date")
+    prefix = "-" if sort_dir == "desc" else ""
+    qs = qs.order_by(f"{prefix}{order_field}", "-journal_entry__date")
+
     return qs
 
 

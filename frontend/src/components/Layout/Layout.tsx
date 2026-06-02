@@ -28,6 +28,7 @@ import {
   History as HistoryIcon,
   ManageAccounts as ManageAccountsIcon,
   RequestQuote as RequestQuoteIcon,
+  MenuBook as MenuBookIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
@@ -112,6 +113,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       label: t('sidebar.reports'),
       items: [
         { text: t('sidebar.reportsOverview'), icon: <ReportsIcon fontSize="small" />, path: '/reports' },
+        { text: t('sidebar.accountingRules'), icon: <MenuBookIcon fontSize="small" />, path: '/accounting-rules' },
       ],
     },
     {

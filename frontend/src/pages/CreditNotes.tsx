@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
@@ -291,7 +292,7 @@ const CreditNotes: React.FC = () => {
                 </TableCell>
                 <TableCell>{cn.customer_name}</TableCell>
                 <TableCell>{cn.invoice_number || '—'}</TableCell>
-                <TableCell>{cn.date}</TableCell>
+                <TableCell>{formatDate(cn.date)}</TableCell>
                 <TableCell align="right">{parseFloat(cn.subtotal).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}</TableCell>
                 <TableCell align="right">{parseFloat(cn.tax_amount).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}</TableCell>
                 <TableCell align="right">{parseFloat(cn.total).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}</TableCell>
@@ -453,7 +454,7 @@ const CreditNotes: React.FC = () => {
                 </Box>
                 <Box>
                   <Typography variant="caption" color="text.secondary">{t('common.date')}</Typography>
-                  <Typography variant="body2">{viewing.date}</Typography>
+                  <Typography variant="body2">{formatDate(viewing.date)}</Typography>
                 </Box>
               </Box>
               {viewing.invoice_number && (

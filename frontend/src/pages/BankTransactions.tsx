@@ -1,9 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, TextField, MenuItem, TablePagination,
 } from '@mui/material';
-import { Download as DownloadIcon, Search as SearchIcon } from '@mui/icons-material';
+import {
+  Download as DownloadIcon, Search as SearchIcon,
+  ArrowUpward as ArrowUpIcon, ArrowDownward as ArrowDownIcon,
+} from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import api from '../services/api';
 import { downloadBlob } from '../utils/csvExport';
@@ -44,6 +48,10 @@ const BankTransactions: React.FC = () => {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(50);
 
+  // Sort state
+  const [sortField, setSortField] = useState('date');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
   // Filter state
   const [filterBankAccount, setFilterBankAccount] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
@@ -58,6 +66,8 @@ const BankTransactions: React.FC = () => {
     if (filterDateFrom) params.set('date_from', filterDateFrom);
     if (filterDateTo) params.set('date_to', filterDateTo);
     if (filterSearch) params.set('search', filterSearch);
+    if (sortField) params.set('sort', sortField);
+    if (sortDir) params.set('sort_dir', sortDir);
 
     try {
       const res = await api.get(`/bank-transactions?${params.toString()}`);
@@ -69,7 +79,7 @@ const BankTransactions: React.FC = () => {
         setBankAccounts(data.bank_accounts);
       }
     } catch { /* ignore */ }
-  }, [rowsPerPage, filterBankAccount, filterDateFrom, filterDateTo, filterSearch]);
+  }, [rowsPerPage, filterBankAccount, filterDateFrom, filterDateTo, filterSearch, sortField, sortDir]);
 
   useEffect(() => {
     fetchTransactions(page);
@@ -92,6 +102,28 @@ const BankTransactions: React.FC = () => {
       downloadBlob(new Blob([res.data]), 'bank_transactions.csv');
     } catch { /* ignore */ }
   };
+
+  const handleSort = (field: string) => {
+    const newDir = sortField === field && sortDir === 'desc' ? 'asc' : 'desc';
+    setSortField(field);
+    setSortDir(newDir);
+    setPage(0);
+  };
+
+  const SortHeader = ({ field, label, align }: { field: string; label: string; align?: 'right' }) => (
+    <TableCell
+      align={align}
+      sx={{ fontWeight: 600, cursor: 'pointer', userSelect: 'none', '&:hover': { bgcolor: '#e0e0e0' } }}
+      onClick={() => handleSort(field)}
+    >
+      <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+        {label}
+        {sortField === field ? (
+          sortDir === 'desc' ? <ArrowDownIcon sx={{ fontSize: 14 }} /> : <ArrowUpIcon sx={{ fontSize: 14 }} />
+        ) : null}
+      </Box>
+    </TableCell>
+  );
 
   const fmt = (val: string) => {
     const n = parseFloat(val);
@@ -180,14 +212,14 @@ const BankTransactions: React.FC = () => {
       <TableContainer component={Paper}>
         <Table size="small">
           <TableHead>
-            <TableRow>
-              <TableCell>{t('common.date')}</TableCell>
-              <TableCell>{t('accounts.entryNumber')}</TableCell>
-              <TableCell>{t('common.description')}</TableCell>
-              <TableCell>{t('common.reference')}</TableCell>
-              <TableCell>{t('bankTransactions.bankAccount')}</TableCell>
-              <TableCell align="right">{t('common.debit')}</TableCell>
-              <TableCell align="right">{t('common.credit')}</TableCell>
+            <TableRow sx={{ bgcolor: '#f5f5f5' }}>
+              <SortHeader field="date" label={t('common.date')} />
+              <SortHeader field="entry_number" label={t('accounts.entryNumber')} />
+              <SortHeader field="description" label={t('common.description')} />
+              <SortHeader field="reference" label={t('common.reference')} />
+              <SortHeader field="bank_account" label={t('bankTransactions.bankAccount')} />
+              <SortHeader field="debit" label={t('common.debit')} align="right" />
+              <SortHeader field="credit" label={t('common.credit')} align="right" />
             </TableRow>
           </TableHead>
           <TableBody>
@@ -200,7 +232,7 @@ const BankTransactions: React.FC = () => {
             ) : (
               transactions.map((txn) => (
                 <TableRow key={txn.id} hover>
-                  <TableCell sx={{ whiteSpace: 'nowrap' }}>{txn.date}</TableCell>
+                  <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(txn.date)}</TableCell>
                   <TableCell>{txn.entry_number}</TableCell>
                   <TableCell>{txn.description}</TableCell>
                   <TableCell>{txn.reference}</TableCell>

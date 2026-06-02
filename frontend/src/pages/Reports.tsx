@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Card, CardContent, Table, TableBody, TableCell,
   TableContainer, TableHead, TableRow, Paper, Tabs, Tab, TextField, Button, Chip, Link,
@@ -474,7 +475,7 @@ const Reports: React.FC = () => {
                   <TableBody>
                     {(acct.entries || []).map((e: any, i: number) => (
                       <TableRow key={i} hover>
-                        <TableCell>{e.date}</TableCell>
+                        <TableCell>{formatDate(e.date)}</TableCell>
                         <TableCell sx={{ fontFamily: 'monospace', fontSize: '12px' }}>{e.entry_number}</TableCell>
                         <TableCell>{e.description}</TableCell>
                         <TableCell align="right">{parseFloat(e.debit || '0') > 0 ? parseFloat(e.debit).toLocaleString(i18n.language) : ''}</TableCell>

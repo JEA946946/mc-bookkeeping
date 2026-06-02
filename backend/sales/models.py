@@ -60,6 +60,10 @@ class Invoice(models.Model):
     paid_amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     currency = models.CharField(max_length=3, default="MAD")
     exchange_rate = models.DecimalField(max_digits=10, decimal_places=4, default=1)
+    vat_quarter = models.IntegerField(
+        default=1, choices=[(1, "Q1"), (2, "Q2"), (3, "Q3"), (4, "Q4")]
+    )
+    vat_year = models.IntegerField(default=2025)
     notes = models.TextField(blank=True, default="")
     journal_entry = models.ForeignKey(
         "journals.JournalEntry",

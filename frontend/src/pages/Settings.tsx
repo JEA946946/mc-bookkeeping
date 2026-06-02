@@ -16,6 +16,7 @@ interface CompanySettings {
   email: string;
   currency: string;
   fiscal_year_start_month: number;
+  date_format: string;
   logo_url: string;
 }
 
@@ -29,8 +30,17 @@ const EMPTY_SETTINGS: CompanySettings = {
   email: '',
   currency: 'MAD',
   fiscal_year_start_month: 1,
+  date_format: 'DD-MM-YYYY',
   logo_url: '',
 };
+
+const DATE_FORMAT_OPTIONS = [
+  { value: 'DD-MM-YYYY', label: '31-12-2025' },
+  { value: 'DD/MM/YYYY', label: '31/12/2025' },
+  { value: 'DD.MM.YYYY', label: '31.12.2025' },
+  { value: 'MM/DD/YYYY', label: '12/31/2025' },
+  { value: 'YYYY-MM-DD', label: '2025-12-31' },
+];
 
 const Settings: React.FC = () => {
   const { t } = useTranslation();
@@ -74,6 +84,7 @@ const Settings: React.FC = () => {
           email: data.email || '',
           currency: data.currency || 'MAD',
           fiscal_year_start_month: data.fiscal_year_start_month || 1,
+          date_format: data.date_format || 'DD-MM-YYYY',
           logo_url: data.logo_url || '',
         });
         if (data.logo_url) {
@@ -132,6 +143,7 @@ const Settings: React.FC = () => {
         fiscal_year_start_month: Number(form.fiscal_year_start_month),
       };
       await api.put('/settings', payload);
+      localStorage.setItem('bk_date_format', form.date_format);
       setSuccess(true);
       setLogoFile(null);
       setTimeout(() => setSuccess(false), 3000);
@@ -258,6 +270,22 @@ const Settings: React.FC = () => {
               ))}
             </TextField>
           </Box>
+
+          {/* Date Format */}
+          <TextField
+            label={t('settings.dateFormat')}
+            value={form.date_format}
+            size="small"
+            select
+            sx={{ width: 240 }}
+            onChange={e => setForm({ ...form, date_format: e.target.value })}
+          >
+            {DATE_FORMAT_OPTIONS.map(opt => (
+              <MenuItem key={opt.value} value={opt.value}>
+                {opt.label} ({opt.value})
+              </MenuItem>
+            ))}
+          </TextField>
 
           {/* Logo Upload */}
           <Box>

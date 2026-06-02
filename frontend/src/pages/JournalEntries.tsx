@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
@@ -351,7 +352,7 @@ const JournalEntries: React.FC = () => {
                     {entry.entry_number}
                   </Typography>
                 </TableCell>
-                <TableCell>{entry.date}</TableCell>
+                <TableCell>{formatDate(entry.date)}</TableCell>
                 <TableCell>{entry.description}</TableCell>
                 <TableCell>{entry.reference}</TableCell>
                 <TableCell align="right">{parseFloat(entry.total_debit).toLocaleString(i18n.language)}</TableCell>

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
@@ -382,7 +383,7 @@ const Projects: React.FC = () => {
               <TableBody>
                 {projectLines.map(line => (
                   <TableRow key={line.id} hover>
-                    <TableCell>{line.date}</TableCell>
+                    <TableCell>{formatDate(line.date)}</TableCell>
                     <TableCell>
                       <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                         {line.entry_number}
@@ -484,7 +485,7 @@ const Projects: React.FC = () => {
                           onChange={() => toggleLineSelection(line.id)}
                         />
                       </TableCell>
-                      <TableCell>{line.date}</TableCell>
+                      <TableCell>{formatDate(line.date)}</TableCell>
                       <TableCell>
                         <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                           {line.entry_number}

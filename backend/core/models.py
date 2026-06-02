@@ -354,6 +354,7 @@ class CompanySettings(models.Model):
     email = models.EmailField(blank=True, default="")
     currency = models.CharField(max_length=3, default="MAD")
     fiscal_year_start_month = models.IntegerField(default=1)
+    date_format = models.CharField(max_length=20, default="DD-MM-YYYY")
     logo = models.FileField(upload_to="logos/", blank=True, null=True)
 
     class Meta:

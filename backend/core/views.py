@@ -254,6 +254,7 @@ def _settings_dict(settings_obj):
         "email": settings_obj.email,
         "currency": settings_obj.currency,
         "fiscal_year_start_month": settings_obj.fiscal_year_start_month,
+        "date_format": settings_obj.date_format,
         "logo": settings_obj.logo.url if settings_obj.logo else None,
     }
 
@@ -2122,7 +2123,7 @@ def settings_detail(request):
     data = request.data
     for field in (
         "company_name", "address", "city", "country", "tax_id",
-        "phone", "email", "currency", "fiscal_year_start_month",
+        "phone", "email", "currency", "fiscal_year_start_month", "date_format",
     ):
         if field in data:
             setattr(settings_obj, field, data[field])
@@ -2223,4 +2224,34 @@ def user_role_update(request, pk):
         "success": True,
         "message": "User role updated",
         "data": {"user": _user_dict(user)},
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def user_reset_password(request, pk):
+    """Reset a user's password to the default admin password."""
+    try:
+        target_user = User.objects.get(id=pk)
+    except User.DoesNotExist:
+        return Response(
+            {"success": False, "message": "User not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    default_pw = getattr(settings, "DEFAULT_ADMIN_PASSWORD", "")
+    if not default_pw:
+        return Response(
+            {"success": False, "message": "DEFAULT_ADMIN_PASSWORD not configured"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    target_user.set_password(default_pw)
+    target_user.save()
+
+    log_action(request.user, "update", "User", target_user.id,
+               changes={"action": "password_reset"}, ip=_get_client_ip(request))
+    return Response({
+        "success": True,
+        "message": f"Password for '{target_user.username}' has been reset",
     })
