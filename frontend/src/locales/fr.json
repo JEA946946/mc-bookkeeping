@@ -455,7 +455,7 @@
     "title": "Factures fournisseurs",
     "newBill": "Nouvelle facture fournisseur",
     "editBill": "Modifier {{number}}",
-    "editApprovedNote": "Cette facture est déjà comptabilisée — l'enregistrer met à jour son écriture comptable. Les paiements existants sont conservés et le solde est recalculé.",
+    "editApprovedNote": "L'enregistrement remet cette facture en brouillon et supprime son écriture comptable — vous devrez l'approuver à nouveau pour la re-comptabiliser. Les paiements éventuels sont conservés.",
     "billNumber": "N° de facture",
     "supplier": "Fournisseur",
     "addNewSupplier": "Ajouter un nouveau fournisseur",

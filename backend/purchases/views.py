@@ -695,22 +695,18 @@ def bills_detail(request, pk):
     else:
         bill.save()
 
-    # Keep the journal entry in sync for any posted bill (approved/paid/overdue).
-    # Payments and paid_amount are untouched; recompute the paid status against
-    # the (possibly changed) total.
+    # Editing a posted bill pulls it back to draft and removes its journal
+    # entry — it must be approved again to re-post. Any payments (paid_amount /
+    # payment links) are left untouched; the paid status is recomputed when the
+    # bill is re-approved.
     if bill.status != "draft" and bill.journal_entry_id:
-        ok, err = _resync_bill_journal(bill)
-        if not ok:
-            return Response(
-                {"success": False, "message": err},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if bill.total > 0 and bill.paid_amount >= bill.total:
-            bill.status = "paid"
-        elif bill.status == "paid":
-            # No longer fully covered after the edit — reopen as approved.
-            bill.status = "approved"
-        bill.save(update_fields=["status"])
+        with transaction.atomic():
+            entry = bill.journal_entry
+            bill.status = "draft"
+            bill.journal_entry = None
+            bill.save(update_fields=["status", "journal_entry"])
+            entry.lines.all().delete()
+            entry.delete()
 
     bill.refresh_from_db()
     return Response({
@@ -807,38 +803,15 @@ def _approve_bill(bill, created_by):
 
         _post_bill_journal_lines(entry, bill, ap_account)
 
-        bill.status = "approved"
         bill.journal_entry = entry
+        # A bill that was already (fully) paid before being edited and pulled
+        # back to draft returns straight to "paid" on re-approval; otherwise it
+        # becomes "approved".
+        if bill.total > 0 and bill.paid_amount >= bill.total:
+            bill.status = "paid"
+        else:
+            bill.status = "approved"
         bill.save()
-
-    return True, None
-
-
-def _resync_bill_journal(bill):
-    """Rebuild the journal entry of an already-approved bill after edits.
-
-    Returns (True, None) on success or (False, "error message") on failure.
-    The rebuild runs in a transaction so a failure leaves the old entry intact.
-    """
-    entry = bill.journal_entry
-    if entry is None:
-        return True, None
-
-    if not bill.supplier:
-        return False, "Supplier must be assigned"
-
-    try:
-        ap_account = Account.objects.get(code="200000")
-    except Account.DoesNotExist:
-        return False, "Accounts Payable account (200000) not found"
-
-    with transaction.atomic():
-        entry.date = bill.date
-        entry.description = f"Bill {bill.bill_number} — {bill.supplier.name}"
-        entry.reference = bill.bill_number
-        entry.save()
-        entry.lines.all().delete()
-        _post_bill_journal_lines(entry, bill, ap_account)
 
     return True, None
 

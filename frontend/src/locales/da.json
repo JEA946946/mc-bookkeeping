@@ -455,7 +455,7 @@
     "title": "Regninger",
     "newBill": "Ny Regning",
     "editBill": "Rediger {{number}}",
-    "editApprovedNote": "Denne regning er allerede bogført — når du gemmer, opdateres dens kassekladde-postering. Eksisterende betalinger bevares, og saldoen genberegnes.",
+    "editApprovedNote": "Når du gemmer, sættes regningen tilbage til kladde, og dens kassekladde-postering fjernes — du skal godkende den igen for at bogføre den på ny. Eventuelle betalinger bevares.",
     "billNumber": "Regning Nr",
     "supplier": "Leverandør",
     "addNewSupplier": "Tilføj Ny Leverandør",
