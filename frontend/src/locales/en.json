@@ -455,7 +455,7 @@
     "title": "Bills",
     "newBill": "New Bill",
     "editBill": "Edit {{number}}",
-    "editApprovedNote": "This bill is approved — saving will update its journal entry.",
+    "editApprovedNote": "This bill is already posted — saving updates its journal entry. Existing payments are kept and the balance is recalculated.",
     "billNumber": "Bill No.",
     "supplier": "Supplier",
     "addNewSupplier": "Add New Supplier",

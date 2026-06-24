@@ -597,12 +597,13 @@ def bills_detail(request, pk):
         bill.delete()
         return Response({"success": True, "message": "Bill deleted"})
 
-    # PUT — update. Draft and approved bills can be edited. Editing an
-    # approved bill re-syncs its journal entry so the books stay consistent.
-    # Paid bills are locked because they have linked payments.
-    if bill.status not in ("draft", "approved"):
+    # PUT — update. All bills can be edited. Editing a posted bill
+    # (approved/paid/overdue) re-syncs its expense journal entry so the books
+    # match the new lines. Existing payments are left untouched; the paid/
+    # approved status is recomputed against the new total afterwards.
+    if bill.status not in ("draft", "approved", "paid", "overdue"):
         return Response(
-            {"success": False, "message": "Only draft and approved bills can be edited"},
+            {"success": False, "message": "This bill cannot be edited"},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -694,14 +695,22 @@ def bills_detail(request, pk):
     else:
         bill.save()
 
-    # Keep the journal entry in sync when an approved bill is edited.
-    if bill.status == "approved":
+    # Keep the journal entry in sync for any posted bill (approved/paid/overdue).
+    # Payments and paid_amount are untouched; recompute the paid status against
+    # the (possibly changed) total.
+    if bill.status != "draft" and bill.journal_entry_id:
         ok, err = _resync_bill_journal(bill)
         if not ok:
             return Response(
                 {"success": False, "message": err},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if bill.total > 0 and bill.paid_amount >= bill.total:
+            bill.status = "paid"
+        elif bill.status == "paid":
+            # No longer fully covered after the edit — reopen as approved.
+            bill.status = "approved"
+        bill.save(update_fields=["status"])
 
     bill.refresh_from_db()
     return Response({

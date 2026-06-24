@@ -674,13 +674,11 @@ const Bills: React.FC = () => {
                       <ViewIcon sx={{ fontSize: 16 }} />
                     </IconButton>
                   </Tooltip>
-                  {(bill.status === 'draft' || bill.status === 'approved') && (
-                    <Tooltip title={t('common.edit')}>
-                      <IconButton size="small" onClick={() => handleOpen(bill)}>
-                        <EditIcon sx={{ fontSize: 16 }} />
-                      </IconButton>
-                    </Tooltip>
-                  )}
+                  <Tooltip title={t('common.edit')}>
+                    <IconButton size="small" onClick={() => handleOpen(bill)}>
+                      <EditIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
                   {(bill.status === 'draft' || bill.status === 'approved') && (
                     <Tooltip title={t('common.approve')}>
                       <span>
@@ -737,7 +735,7 @@ const Bills: React.FC = () => {
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="lg" fullWidth>
         <DialogTitle>{editing ? t('bills.editBill', { number: editing.bill_number }) : t('bills.newBill')}</DialogTitle>
         <DialogContent>
-          {editing?.status === 'approved' && (
+          {editing && editing.status !== 'draft' && (
             <Box sx={{ mt: 1, mb: 1, p: 1, bgcolor: '#fff3e0', borderRadius: 1, border: '1px solid #ffe0b2' }}>
               <Typography variant="body2" sx={{ color: '#e65100' }}>
                 {t('bills.editApprovedNote')}
