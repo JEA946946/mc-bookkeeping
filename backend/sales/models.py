@@ -97,7 +97,14 @@ class InvoiceLine(models.Model):
     )
     description = models.CharField(max_length=500)
     quantity = models.DecimalField(max_digits=10, decimal_places=2, default=1)
-    unit_price = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    unit_price = models.DecimalField(
+        max_digits=15, decimal_places=2, default=0,
+        help_text="Purchase price — drives the billed line amount",
+    )
+    sales_price = models.DecimalField(
+        max_digits=15, decimal_places=2, default=0,
+        help_text="Sales price — informational only, does not affect totals",
+    )
     tax_code = models.ForeignKey(
         "core.TaxCode",
         on_delete=models.SET_NULL,
@@ -106,16 +113,27 @@ class InvoiceLine(models.Model):
         related_name="invoice_lines",
     )
     account = models.ForeignKey(
-        Account, on_delete=models.PROTECT, related_name="invoice_lines"
+        Account, on_delete=models.PROTECT, related_name="invoice_lines",
+        null=True, blank=True,
     )
     amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    is_text = models.BooleanField(
+        default=False, help_text="Text-only line (no quantity/price/account)"
+    )
+    is_hidden = models.BooleanField(
+        default=False, help_text="Hidden on the printed/customer invoice, still counts in totals"
+    )
+    position = models.IntegerField(default=0, help_text="Display order within the invoice")
 
     class Meta:
         db_table = "invoice_lines"
-        ordering = ["id"]
+        ordering = ["position", "id"]
 
     def save(self, *args, **kwargs):
-        self.amount = self.quantity * self.unit_price
+        if self.is_text:
+            self.amount = 0
+        else:
+            self.amount = self.quantity * self.unit_price
         super().save(*args, **kwargs)
 
 

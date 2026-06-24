@@ -82,7 +82,7 @@ def login(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
     try:
-        user = User.objects.get(username=username)
+        user = User.objects.get(username__iexact=username)
     except User.DoesNotExist:
         return Response(
             {"success": False, "message": "Invalid credentials"},

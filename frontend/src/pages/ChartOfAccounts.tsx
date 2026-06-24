@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { formatDate } from '../utils/dateFormat';
 import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
-  DialogActions, TextField, MenuItem, Chip,
+  DialogActions, TextField, MenuItem, Chip, Autocomplete,
 } from '@mui/material';
 import {
   Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon,
@@ -198,56 +198,74 @@ const ChartOfAccounts: React.FC = () => {
     exportToCSV('chart_of_accounts.csv', headers, rows);
   };
 
-  // Build tree structure
-  const topLevel = accounts.filter(a => !a.parent_id);
-  const childrenOf = (parentId: string) => accounts.filter(a => a.parent_id === parentId);
+  // Build tree structure (memoized to avoid re-rendering table on form keystrokes)
+  const childrenMap = useMemo(() => {
+    const map: Record<string, Account[]> = {};
+    for (const a of accounts) {
+      const pid = a.parent_id || '__root__';
+      if (!map[pid]) map[pid] = [];
+      map[pid].push(a);
+    }
+    return map;
+  }, [accounts]);
 
-  const renderRow = (account: Account, depth: number = 0) => {
-    const children = childrenOf(account.id);
-    const hasChildren = children.length > 0;
-    const isExpanded = expanded[account.id] !== false; // default expanded
+  const topLevel = childrenMap['__root__'] || [];
+  const childrenOf = (parentId: string) => childrenMap[parentId] || [];
 
-    return (
-      <React.Fragment key={account.id}>
-        <TableRow hover sx={{ opacity: account.is_active ? 1 : 0.5 }}>
-          <TableCell sx={{ pl: 2 + depth * 3, whiteSpace: 'nowrap' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              {hasChildren && (
-                <IconButton size="small" onClick={() => toggleExpand(account.id)} sx={{ p: 0 }}>
-                  {isExpanded ? <ExpandLess sx={{ fontSize: 16 }} /> : <ExpandMore sx={{ fontSize: 16 }} />}
-                </IconButton>
-              )}
-              <Typography variant="body2" sx={{ fontWeight: hasChildren ? 600 : 400, fontFamily: 'monospace' }}>
-                {account.code}
+  const renderedRows = useMemo(() => {
+    const renderRow = (account: Account, depth: number = 0): React.ReactNode => {
+      const children = childrenOf(account.id);
+      const hasChildren = children.length > 0;
+      const isExpanded = expanded[account.id] !== false;
+
+      return (
+        <React.Fragment key={account.id}>
+          <TableRow hover sx={{ opacity: account.is_active ? 1 : 0.5 }}>
+            <TableCell sx={{ pl: 2 + depth * 3, whiteSpace: 'nowrap' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                {hasChildren && (
+                  <IconButton size="small" onClick={() => toggleExpand(account.id)} sx={{ p: 0 }}>
+                    {isExpanded ? <ExpandLess sx={{ fontSize: 16 }} /> : <ExpandMore sx={{ fontSize: 16 }} />}
+                  </IconButton>
+                )}
+                <Typography variant="body2" sx={{ fontWeight: hasChildren ? 600 : 400, fontFamily: 'monospace' }}>
+                  {account.code}
+                </Typography>
+              </Box>
+            </TableCell>
+            <TableCell>
+              <Typography variant="body2" sx={{ fontWeight: hasChildren ? 600 : 400 }}>
+                {account.name}
               </Typography>
-            </Box>
-          </TableCell>
-          <TableCell>
-            <Typography variant="body2" sx={{ fontWeight: hasChildren ? 600 : 400 }}>
-              {account.name}
-            </Typography>
-          </TableCell>
-          <TableCell>
-            <Chip
-              label={account.account_type_name}
-              size="small"
-              sx={{ bgcolor: TYPE_COLORS[account.account_type_name] || '#666', color: '#fff', height: 20, fontSize: '11px' }}
-            />
-          </TableCell>
-          <TableCell>
-            <Typography variant="caption">{account.normal_balance}</Typography>
-          </TableCell>
-          <TableCell>{account.currency}</TableCell>
-          <TableCell align="right">
-            <IconButton size="small" onClick={() => openLedger(account)}><ViewIcon sx={{ fontSize: 16 }} /></IconButton>
-            <IconButton size="small" onClick={() => handleOpen(account)}><EditIcon sx={{ fontSize: 16 }} /></IconButton>
-            <IconButton size="small" onClick={() => handleDelete(account.id)} color="error"><DeleteIcon sx={{ fontSize: 16 }} /></IconButton>
-          </TableCell>
-        </TableRow>
-        {hasChildren && isExpanded && children.map(child => renderRow(child, depth + 1))}
-      </React.Fragment>
-    );
-  };
+            </TableCell>
+            <TableCell>
+              <Chip
+                label={account.account_type_name}
+                size="small"
+                sx={{ bgcolor: TYPE_COLORS[account.account_type_name] || '#666', color: '#fff', height: 20, fontSize: '11px' }}
+              />
+            </TableCell>
+            <TableCell>
+              <Typography variant="caption">{account.normal_balance}</Typography>
+            </TableCell>
+            <TableCell>{account.currency}</TableCell>
+            <TableCell align="right">
+              <IconButton size="small" onClick={() => openLedger(account)}><ViewIcon sx={{ fontSize: 16 }} /></IconButton>
+              <IconButton size="small" onClick={() => handleOpen(account)}><EditIcon sx={{ fontSize: 16 }} /></IconButton>
+              <IconButton size="small" onClick={() => handleDelete(account.id)} color="error"><DeleteIcon sx={{ fontSize: 16 }} /></IconButton>
+            </TableCell>
+          </TableRow>
+          {hasChildren && isExpanded && children.map(child => renderRow(child, depth + 1))}
+        </React.Fragment>
+      );
+    };
+    return topLevel.map(a => renderRow(a));
+  }, [accounts, expanded]);
+
+  const parentOptions = useMemo(() =>
+    accounts.filter(a => a.id !== editing?.id),
+    [accounts, editing?.id]
+  );
 
   return (
     <Box>
@@ -279,7 +297,7 @@ const ChartOfAccounts: React.FC = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {topLevel.map(a => renderRow(a))}
+            {renderedRows}
           </TableBody>
         </Table>
       </TableContainer>
@@ -313,15 +331,25 @@ const ChartOfAccounts: React.FC = () => {
                 onChange={e => setForm({ ...form, currency: e.target.value })}
               />
             </Box>
-            <TextField
-              label={t('accounts.parentAccount')} value={form.parent_id} size="small" select fullWidth
-              onChange={e => setForm({ ...form, parent_id: e.target.value })}
-            >
-              <MenuItem value="">{t('accounts.noParent')}</MenuItem>
-              {accounts.filter(a => a.id !== editing?.id).map(a => (
-                <MenuItem key={a.id} value={a.id}>{a.code} — {a.name}</MenuItem>
-              ))}
-            </TextField>
+            <Autocomplete
+              size="small"
+              fullWidth
+              options={parentOptions}
+              value={accounts.find(a => a.id === form.parent_id) || null}
+              onChange={(_e, val) => setForm({ ...form, parent_id: val?.id || '' })}
+              getOptionLabel={(a) => `${a.code} — ${a.name}`}
+              filterOptions={(options, state) => {
+                const input = state.inputValue.toLowerCase();
+                if (!input) return options.slice(0, 50);
+                return options.filter(a =>
+                  a.name.toLowerCase().includes(input) || a.code.toLowerCase().includes(input)
+                ).slice(0, 50);
+              }}
+              renderInput={(params) => (
+                <TextField {...params} label={t('accounts.parentAccount')} placeholder={t('accounts.noParent')} />
+              )}
+              isOptionEqualToValue={(option, value) => option.id === value.id}
+            />
             <TextField
               label={t('common.description')} value={form.description} size="small" multiline rows={2}
               onChange={e => setForm({ ...form, description: e.target.value })}

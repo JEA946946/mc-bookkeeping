@@ -118,6 +118,28 @@ class BillLine(models.Model):
         super().save(*args, **kwargs)
 
 
+class BillPaymentLink(models.Model):
+    """Links a bank transaction (journal entry line) to a bill as a payment."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    bill = models.ForeignKey(Bill, on_delete=models.CASCADE, related_name="payment_links")
+    journal_entry_line = models.ForeignKey(
+        "journals.JournalEntryLine",
+        on_delete=models.CASCADE,
+        related_name="bill_payment_links",
+    )
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+    matched_by = models.CharField(max_length=200, blank=True, default="")
+    matched_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "bill_payment_links"
+        unique_together = [("bill", "journal_entry_line")]
+
+    def __str__(self):
+        return f"BillPaymentLink {self.bill_id} ↔ {self.journal_entry_line_id} ({self.amount})"
+
+
 class Expense(models.Model):
     """Direct expense entry."""
 

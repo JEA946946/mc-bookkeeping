@@ -37,6 +37,7 @@ const AuditLog = React.lazy(() => import('./pages/AuditLog'));
 const Settings = React.lazy(() => import('./pages/Settings'));
 const Users = React.lazy(() => import('./pages/Users'));
 const AccountingRules = React.lazy(() => import('./pages/AccountingRules'));
+const Payroll = React.lazy(() => import('./pages/Payroll'));
 
 const PageLoader = () => (
   <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh' }}>
@@ -132,6 +133,8 @@ function App() {
               <Route path="/suppliers" element={<P><Suppliers /></P>} />
               <Route path="/bills" element={<P><Bills /></P>} />
               <Route path="/expenses" element={<P><Expenses /></P>} />
+              {/* Payroll */}
+              <Route path="/payroll" element={<P><Payroll /></P>} />
               {/* Bank */}
               <Route path="/bank-statements" element={<P><BankStatements /></P>} />
               <Route path="/bank-transactions" element={<P><BankTransactions /></P>} />

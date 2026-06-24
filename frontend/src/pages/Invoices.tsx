@@ -4,7 +4,8 @@ import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, IconButton, Dialog, DialogTitle, DialogContent,
   DialogActions, TextField, MenuItem, Chip, Tooltip, TablePagination,
-  Autocomplete, Divider, Alert, CircularProgress, InputAdornment,
+  Autocomplete, Divider, Alert, CircularProgress, InputAdornment, Checkbox,
+  GlobalStyles,
 } from '@mui/material';
 import {
   Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon,
@@ -12,6 +13,9 @@ import {
   AddCircleOutline as AddLineIcon, RemoveCircleOutline as RemoveLineIcon,
   Search as SearchIcon, Download as DownloadIcon,
   CloudDownload as CmrIcon, CheckCircle as CheckCircleIcon,
+  Notes as TextLineIcon, VisibilityOff as HiddenIcon,
+  ArrowUpward as MoveUpIcon, ArrowDownward as MoveDownIcon,
+  Print as PrintIcon, Description as PreviewIcon,
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import api from '../services/api';
@@ -25,6 +29,10 @@ interface Customer {
   id: string;
   code: string;
   name: string;
+  address?: string;
+  tax_id?: string;
+  email?: string;
+  phone?: string;
 }
 
 interface Account {
@@ -45,6 +53,7 @@ interface InvoiceLine {
   description: string;
   quantity: string;
   unit_price: string;
+  sales_price: string;
   account_id: string;
   account_code?: string;
   account_name?: string;
@@ -52,6 +61,8 @@ interface InvoiceLine {
   tax_code_name?: string;
   tax_code_rate?: string;
   amount?: string;
+  is_text?: boolean;
+  is_hidden?: boolean;
 }
 
 interface Invoice {
@@ -68,6 +79,7 @@ interface Invoice {
   tax_amount: string;
   total: string;
   amount_paid: string;
+  currency: string;
   exchange_rate: string;
   vat_quarter?: number;
   vat_year?: number;
@@ -98,8 +110,22 @@ const EMPTY_LINE: InvoiceLine = {
   description: '',
   quantity: '1',
   unit_price: '0',
+  sales_price: '0',
   account_id: '',
   tax_code_id: null,
+  is_text: false,
+  is_hidden: false,
+};
+
+const EMPTY_TEXT_LINE: InvoiceLine = {
+  description: '',
+  quantity: '0',
+  unit_price: '0',
+  sales_price: '0',
+  account_id: '',
+  tax_code_id: null,
+  is_text: true,
+  is_hidden: false,
 };
 
 const STATUS_CHIP_COLOR: Record<string, 'default' | 'primary' | 'success' | 'error'> = {
@@ -117,6 +143,7 @@ const STATUS_CHIP_COLOR: Record<string, 'default' | 'primary' | 'success' | 'err
 // fmt is defined inside the component to access i18n.language
 
 const computeLineAmount = (line: InvoiceLine): number => {
+  if (line.is_text) return 0;
   const qty = parseFloat(line.quantity || '0');
   const price = parseFloat(line.unit_price || '0');
   return qty * price;
@@ -133,6 +160,34 @@ const Invoices: React.FC = () => {
     const n = typeof v === 'string' ? parseFloat(v) : v;
     if (isNaN(n)) return '0,00';
     return n.toLocaleString(i18n.language, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  // Convert a MAD amount to the invoice's presentation currency (rate = MAD per 1 foreign unit).
+  const convertToForeign = (mad: number, currency: string, rateStr: string | number): number => {
+    const rate = typeof rateStr === 'string' ? parseFloat(rateStr || '0') : rateStr;
+    if (currency === 'MAD' || !(rate > 0)) return mad;
+    return mad / rate;
+  };
+  const fmtCur = (mad: number, currency: string, rateStr: string | number) =>
+    `${fmt(convertToForeign(mad, currency, rateStr))} ${currency}`;
+
+  // Sales value of a line in MAD (quantity × sales_price); text lines have none.
+  const lineSalesAmount = (l: { is_text?: boolean; quantity: string; sales_price: string }): number =>
+    l.is_text ? 0 : parseFloat(l.quantity || '0') * parseFloat(l.sales_price || '0');
+
+  // Customer-facing totals (MAD), based on SALES prices — independent of the booked
+  // purchase-based totals. Tax uses each line's stored tax rate.
+  const salesTotals = (inv: Invoice) => {
+    let subtotal = 0;
+    let tax = 0;
+    for (const l of inv.lines || []) {
+      if (l.is_text) continue;
+      const sales = lineSalesAmount(l);
+      subtotal += sales;
+      const rate = parseFloat(l.tax_code_rate || '0');
+      if (rate) tax += sales * rate / 100;
+    }
+    return { subtotal, tax, total: subtotal + tax };
   };
 
   /* ---------- translated lookups (depend on t) ---------- */
@@ -176,6 +231,8 @@ const Invoices: React.FC = () => {
   /* ---------- dialog state ---------- */
   const [dialogOpen, setDialogOpen] = useState(false);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [companySettings, setCompanySettings] = useState<any>(null);
   const [editing, setEditing] = useState<Invoice | null>(null);
   const [viewing, setViewing] = useState<Invoice | null>(null);
   const [error, setError] = useState('');
@@ -195,6 +252,7 @@ const Invoices: React.FC = () => {
   const [formDate, setFormDate] = useState('');
   const [formDueDate, setFormDueDate] = useState('');
   const [formNotes, setFormNotes] = useState('');
+  const [formCurrency, setFormCurrency] = useState('MAD');
   const [formExchangeRate, setFormExchangeRate] = useState('1');
   const [formVatQuarter, setFormVatQuarter] = useState('1');
   const [formVatYear, setFormVatYear] = useState(String(new Date().getFullYear()));
@@ -235,6 +293,11 @@ const Invoices: React.FC = () => {
     api.get('/tax-codes').then(res => {
       if (res.data.success) setTaxCodes(res.data.tax_codes ?? res.data.data?.tax_codes ?? []);
     });
+    api.get('/settings').then(res => {
+      if (res.data.success) {
+        setCompanySettings(res.data.data?.settings ?? res.data.settings ?? res.data.data ?? null);
+      }
+    }).catch(() => { /* settings optional */ });
   };
 
   useEffect(() => {
@@ -358,6 +421,7 @@ const Invoices: React.FC = () => {
           setFormDate(full.date);
           setFormDueDate(full.due_date);
           setFormNotes(full.notes || '');
+          setFormCurrency(full.currency || 'MAD');
           setFormExchangeRate(full.exchange_rate || '1');
           setFormVatQuarter(String(full.vat_quarter ?? 1));
           setFormVatYear(String(full.vat_year ?? new Date().getFullYear()));
@@ -366,8 +430,11 @@ const Invoices: React.FC = () => {
               description: l.description,
               quantity: l.quantity,
               unit_price: l.unit_price,
-              account_id: l.account_id,
+              sales_price: l.sales_price ?? '0',
+              account_id: l.account_id || '',
               tax_code_id: l.tax_code_id ?? null,
+              is_text: !!l.is_text,
+              is_hidden: !!l.is_hidden,
             }))
           );
         }
@@ -383,6 +450,7 @@ const Invoices: React.FC = () => {
       setFormDate(today.toISOString().split('T')[0]);
       setFormDueDate('');
       setFormNotes('');
+      setFormCurrency('MAD');
       setFormExchangeRate('1');
       setFormVatQuarter(String(autoQuarter));
       setFormVatYear(String(today.getFullYear()));
@@ -405,9 +473,16 @@ const Invoices: React.FC = () => {
       setError(t('invoices.selectDueDate'));
       return;
     }
-    const validLines = lines.filter(l => l.description && l.account_id);
-    if (validLines.length === 0) {
+    // A line is valid if it's a text line with text, or a normal line with description + account
+    const validLines = lines.filter(l => l.is_text ? !!l.description : (l.description && l.account_id));
+    if (validLines.filter(l => !l.is_text).length === 0) {
       setError(t('invoices.addAtLeastOneLine'));
+      return;
+    }
+    // Catch the common mistake: a rate was entered but currency is still MAD
+    const rateNum = parseFloat(formExchangeRate || '1');
+    if (formCurrency === 'MAD' && rateNum && rateNum !== 1) {
+      setError(t('invoices.rateNeedsCurrency'));
       return;
     }
 
@@ -416,15 +491,19 @@ const Invoices: React.FC = () => {
       date: formDate,
       due_date: formDueDate,
       notes: formNotes,
-      exchange_rate: formExchangeRate,
+      currency: formCurrency,
+      exchange_rate: formCurrency === 'MAD' ? '1' : formExchangeRate,
       vat_quarter: parseInt(formVatQuarter, 10),
       vat_year: parseInt(formVatYear, 10),
       lines: validLines.map(l => ({
         description: l.description,
         quantity: parseFloat(l.quantity || '0'),
         unit_price: parseFloat(l.unit_price || '0'),
-        account_id: l.account_id,
-        tax_code_id: l.tax_code_id || null,
+        sales_price: parseFloat(l.sales_price || '0'),
+        account_id: l.is_text ? null : l.account_id,
+        tax_code_id: l.is_text ? null : (l.tax_code_id || null),
+        is_text: !!l.is_text,
+        is_hidden: !!l.is_hidden,
       })),
     };
 
@@ -445,13 +524,24 @@ const Invoices: React.FC = () => {
   /*  View dialog                                                      */
   /* ================================================================ */
 
+  const fetchFullInvoice = async (invoice: Invoice): Promise<Invoice | null> => {
+    const res = await api.get(`/invoices/${invoice.id}`);
+    return res.data.success ? (res.data.invoice ?? res.data.data?.invoice) : null;
+  };
+
   const handleView = async (invoice: Invoice) => {
     try {
-      const res = await api.get(`/invoices/${invoice.id}`);
-      if (res.data.success) {
-        setViewing(res.data.invoice ?? res.data.data?.invoice);
-        setViewDialogOpen(true);
-      }
+      const full = await fetchFullInvoice(invoice);
+      if (full) { setViewing(full); setViewDialogOpen(true); }
+    } catch (err: any) {
+      alert(err.response?.data?.message || t('invoices.errorFetching'));
+    }
+  };
+
+  const handlePreview = async (invoice: Invoice) => {
+    try {
+      const full = await fetchFullInvoice(invoice);
+      if (full) { setViewing(full); setPreviewOpen(true); }
     } catch (err: any) {
       alert(err.response?.data?.message || t('invoices.errorFetching'));
     }
@@ -493,15 +583,44 @@ const Invoices: React.FC = () => {
   /*  Line helpers                                                     */
   /* ================================================================ */
 
-  const updateLine = (index: number, field: keyof InvoiceLine, value: string | null) => {
+  const updateLine = (index: number, field: keyof InvoiceLine, value: string | null | boolean) => {
     setLines(prev => prev.map((l, i) => i === index ? { ...l, [field]: value } : l));
+  };
+
+  const toggleHidden = (index: number) => {
+    setLines(prev => prev.map((l, i) => i === index ? { ...l, is_hidden: !l.is_hidden } : l));
   };
 
   const addLine = () => setLines(prev => [...prev, { ...EMPTY_LINE }]);
 
+  const addTextLine = () => setLines(prev => [...prev, { ...EMPTY_TEXT_LINE }]);
+
   const removeLine = (index: number) => {
     if (lines.length <= 1) return;
     setLines(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const moveLine = (index: number, dir: -1 | 1) => {
+    setLines(prev => {
+      const j = index + dir;
+      if (j < 0 || j >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[j]] = [next[j], next[index]];
+      return next;
+    });
+  };
+
+  // Sum of the SALES price of the numeric lines belonging to a text line
+  // (quantity × sales_price, until the next text line)
+  const groupTotal = (index: number): number => {
+    let sum = 0;
+    for (let j = index + 1; j < lines.length; j++) {
+      if (lines[j].is_text) break;
+      const qty = parseFloat(lines[j].quantity || '0');
+      const sp = parseFloat(lines[j].sales_price || '0');
+      sum += qty * sp;
+    }
+    return sum;
   };
 
   /* ---------- totals ---------- */
@@ -646,7 +765,11 @@ const Invoices: React.FC = () => {
                 <TableCell align="right">{fmt(inv.tax_amount)}</TableCell>
                 <TableCell align="right" sx={{ fontWeight: 600 }}>{fmt(inv.total)}</TableCell>
                 <TableCell align="right">{fmt(inv.amount_paid)}</TableCell>
-                <TableCell align="right">{inv.exchange_rate && inv.exchange_rate !== '1.0000' ? inv.exchange_rate : ''}</TableCell>
+                <TableCell align="right">
+                  {inv.currency && inv.currency !== 'MAD'
+                    ? `${inv.currency} @ ${inv.exchange_rate}`
+                    : (inv.exchange_rate && inv.exchange_rate !== '1.0000' ? inv.exchange_rate : '')}
+                </TableCell>
                 <TableCell>
                   <Chip
                     label={STATUS_LABELS[inv.status] || inv.status}
@@ -663,6 +786,11 @@ const Invoices: React.FC = () => {
                   <Tooltip title={t('common.view')}>
                     <IconButton size="small" sx={{ p: 0.3 }} onClick={() => handleView(inv)}>
                       <ViewIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title={t('invoices.preview')}>
+                    <IconButton size="small" sx={{ p: 0.3 }} color="primary" onClick={() => handlePreview(inv)}>
+                      <PreviewIcon sx={{ fontSize: 16 }} />
                     </IconButton>
                   </Tooltip>
                   {inv.status === 'draft' && (
@@ -753,10 +881,24 @@ const Invoices: React.FC = () => {
               InputLabelProps={{ shrink: true }} sx={{ width: 160 }}
             />
             <TextField
-              label={t('invoices.exchangeRate')} value={formExchangeRate} size="small" type="number"
-              onChange={e => setFormExchangeRate(e.target.value)}
-              inputProps={{ min: 0, step: '0.0001' }}
-              sx={{ width: 130 }}
+              select label={t('common.currency')} value={formCurrency} size="small"
+              onChange={e => {
+                const c = e.target.value;
+                setFormCurrency(c);
+                if (c === 'MAD') setFormExchangeRate('1');
+              }}
+              sx={{ width: 100 }}
+            >
+              <MenuItem value="MAD">MAD</MenuItem>
+              <MenuItem value="EUR">EUR</MenuItem>
+              <MenuItem value="USD">USD</MenuItem>
+            </TextField>
+            <TextField
+              label={t('invoices.exchangeRate')} value={formExchangeRate} size="small"
+              type="text" inputMode="decimal"
+              onChange={e => setFormExchangeRate(e.target.value.replace(',', '.').replace(/[^0-9.]/g, ''))}
+              helperText={formCurrency === 'MAD' ? t('invoices.rateMadHint') : t('invoices.rateHint', { cur: formCurrency })}
+              sx={{ width: 170 }}
             />
             <TextField
               select label={t('invoices.vatQuarter')} value={formVatQuarter} size="small"
@@ -786,20 +928,83 @@ const Invoices: React.FC = () => {
             <Table size="small">
               <TableHead>
                 <TableRow sx={{ bgcolor: '#f5f5f5' }}>
+                  <TableCell padding="checkbox" align="center" sx={{ fontWeight: 600 }}>
+                    <Tooltip title={t('invoices.hideOnInvoice')}>
+                      <HiddenIcon sx={{ fontSize: 18, color: 'text.secondary', verticalAlign: 'middle' }} />
+                    </Tooltip>
+                  </TableCell>
                   <TableCell sx={{ fontWeight: 600, minWidth: 200 }}>{t('common.description')}</TableCell>
                   <TableCell sx={{ fontWeight: 600, width: 90 }}>{t('invoices.quantity')}</TableCell>
-                  <TableCell sx={{ fontWeight: 600, width: 120 }}>{t('invoices.unitPrice')}</TableCell>
+                  <TableCell sx={{ fontWeight: 600, width: 120 }}>{t('invoices.purchasePrice')}</TableCell>
+                  <TableCell sx={{ fontWeight: 600, width: 120 }}>{t('invoices.salesPrice')}</TableCell>
                   <TableCell sx={{ fontWeight: 600, minWidth: 220 }}>{t('common.account')}</TableCell>
                   <TableCell sx={{ fontWeight: 600, minWidth: 180 }}>{t('invoices.taxCode')}</TableCell>
                   <TableCell align="right" sx={{ fontWeight: 600, width: 120 }}>{t('common.amount')}</TableCell>
-                  <TableCell sx={{ width: 40 }} />
+                  <TableCell sx={{ width: 112 }} />
                 </TableRow>
               </TableHead>
               <TableBody>
                 {lines.map((line, i) => {
                   const lineAmount = computeLineAmount(line);
+                  const rowSx = line.is_hidden ? { opacity: 0.55 } : undefined;
+                  const hideCell = (
+                    <TableCell padding="checkbox" align="center" sx={{ p: 0.5 }}>
+                      <Tooltip title={t('invoices.hideOnInvoice')}>
+                        <Checkbox size="small" checked={!!line.is_hidden} onChange={() => toggleHidden(i)} />
+                      </Tooltip>
+                    </TableCell>
+                  );
+                  const actionsCell = (
+                    <TableCell sx={{ p: 0.5, whiteSpace: 'nowrap' }}>
+                      <IconButton size="small" onClick={() => moveLine(i, -1)} disabled={i === 0}>
+                        <MoveUpIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                      <IconButton size="small" onClick={() => moveLine(i, 1)} disabled={i === lines.length - 1}>
+                        <MoveDownIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                      <IconButton size="small" onClick={() => removeLine(i)} disabled={lines.length <= 1}>
+                        <RemoveLineIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </TableCell>
+                  );
+
+                  if (line.is_text) {
+                    const gt = groupTotal(i);
+                    const antal = parseFloat(line.quantity || '0');
+                    const perUnit = antal > 0 ? gt / antal : 0;
+                    return (
+                      <TableRow key={i} sx={{ ...rowSx, bgcolor: '#fafafa' }}>
+                        {hideCell}
+                        <TableCell colSpan={4} sx={{ p: 0.5 }}>
+                          <TextField
+                            value={line.description} size="small" fullWidth
+                            placeholder={t('invoices.textLinePlaceholder')}
+                            onChange={e => updateLine(i, 'description', e.target.value)}
+                            InputProps={{ sx: { fontWeight: 600 } }}
+                          />
+                        </TableCell>
+                        <TableCell sx={{ p: 0.5 }}>
+                          <TextField
+                            value={line.quantity === '0' ? '' : line.quantity} size="small" fullWidth
+                            label={t('invoices.quantity')} type="text" inputMode="decimal"
+                            onChange={e => updateLine(i, 'quantity', e.target.value.replace(',', '.').replace(/[^0-9.]/g, ''))}
+                          />
+                        </TableCell>
+                        <TableCell align="right" sx={{ p: 0.5 }}>
+                          <Typography variant="caption" color="text.secondary">{t('invoices.perUnit')}</Typography>
+                          <Typography variant="body2" sx={{ fontWeight: 600 }}>{antal > 0 ? fmtCur(perUnit, formCurrency, formExchangeRate) : '—'}</Typography>
+                        </TableCell>
+                        <TableCell align="right" sx={{ p: 0.5 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 700, pr: 1 }}>{fmtCur(gt, formCurrency, formExchangeRate)}</Typography>
+                        </TableCell>
+                        {actionsCell}
+                      </TableRow>
+                    );
+                  }
+
                   return (
-                    <TableRow key={i}>
+                    <TableRow key={i} sx={rowSx}>
+                      {hideCell}
                       <TableCell sx={{ p: 0.5 }}>
                         <TextField
                           value={line.description} size="small" fullWidth placeholder={t('common.description')}
@@ -817,6 +1022,13 @@ const Invoices: React.FC = () => {
                         <TextField
                           value={line.unit_price} size="small" type="number" fullWidth
                           onChange={e => updateLine(i, 'unit_price', e.target.value)}
+                          inputProps={{ min: 0, step: '0.01' }}
+                        />
+                      </TableCell>
+                      <TableCell sx={{ p: 0.5 }}>
+                        <TextField
+                          value={line.sales_price} size="small" type="number" fullWidth
+                          onChange={e => updateLine(i, 'sales_price', e.target.value)}
                           inputProps={{ min: 0, step: '0.01' }}
                         />
                       </TableCell>
@@ -847,11 +1059,7 @@ const Invoices: React.FC = () => {
                           {fmt(lineAmount)}
                         </Typography>
                       </TableCell>
-                      <TableCell sx={{ p: 0.5 }}>
-                        <IconButton size="small" onClick={() => removeLine(i)} disabled={lines.length <= 1}>
-                          <RemoveLineIcon sx={{ fontSize: 16 }} />
-                        </IconButton>
-                      </TableCell>
+                      {actionsCell}
                     </TableRow>
                   );
                 })}
@@ -859,9 +1067,14 @@ const Invoices: React.FC = () => {
             </Table>
           </TableContainer>
 
-          <Button startIcon={<AddLineIcon />} onClick={addLine} size="small" sx={{ mt: 1 }}>
-            {t('invoices.addLine')}
-          </Button>
+          <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+            <Button startIcon={<AddLineIcon />} onClick={addLine} size="small">
+              {t('invoices.addLine')}
+            </Button>
+            <Button startIcon={<TextLineIcon />} onClick={addTextLine} size="small" color="inherit">
+              {t('invoices.addTextLine')}
+            </Button>
+          </Box>
 
           {/* ---------- totals ---------- */}
           <Divider sx={{ my: 2 }} />
@@ -877,9 +1090,27 @@ const Invoices: React.FC = () => {
               </Box>
               <Divider sx={{ my: 0.5 }} />
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                <Typography variant="body1" sx={{ fontWeight: 700 }}>{t('common.total') + ':'}</Typography>
+                <Typography variant="body1" sx={{ fontWeight: 700 }}>{t('common.total') + ':'} <Typography component="span" variant="caption" color="text.secondary">(MAD)</Typography></Typography>
                 <Typography variant="body1" sx={{ fontWeight: 700 }}>{fmt(grandTotal)}</Typography>
               </Box>
+              {formCurrency !== 'MAD' && (() => {
+                let sSub = 0; let sTax = 0;
+                for (const l of lines) {
+                  if (l.is_text) continue;
+                  const sales = lineSalesAmount(l);
+                  sSub += sales;
+                  const tc = taxCodes.find(tx => tx.id === l.tax_code_id);
+                  if (tc) sTax += sales * parseFloat(tc.rate || '0') / 100;
+                }
+                return (
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
+                    <Typography variant="caption" color="text.secondary">{t('invoices.customerTotal')}:</Typography>
+                    <Typography variant="caption" color="primary" sx={{ fontWeight: 600 }}>
+                      {fmtCur(sSub + sTax, formCurrency, formExchangeRate)}
+                    </Typography>
+                  </Box>
+                );
+              })()}
             </Box>
           </Box>
         </DialogContent>
@@ -924,12 +1155,17 @@ const Invoices: React.FC = () => {
                   <Typography variant="caption" color="text.secondary">{t('invoices.dueDate')}</Typography>
                   <Typography variant="body2">{formatDate(viewing.due_date)}</Typography>
                 </Box>
-                {viewing.exchange_rate && viewing.exchange_rate !== '1' && viewing.exchange_rate !== '1.0000' && (
-                  <Box>
-                    <Typography variant="caption" color="text.secondary">{t('invoices.exchangeRate')}</Typography>
-                    <Typography variant="body2">{viewing.exchange_rate}</Typography>
-                  </Box>
-                )}
+                <Box>
+                  <Typography variant="caption" color="text.secondary">{t('common.currency')}</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    {viewing.currency || 'MAD'}
+                    {viewing.currency && viewing.currency !== 'MAD' && (
+                      <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                        ({t('invoices.rateHint', { cur: viewing.currency })}: {viewing.exchange_rate})
+                      </Typography>
+                    )}
+                  </Typography>
+                </Box>
               </Box>
               {viewing.notes && (
                 <Box sx={{ mb: 2 }}>
@@ -952,20 +1188,50 @@ const Invoices: React.FC = () => {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {viewing.lines?.map((line, i) => (
-                      <TableRow key={i}>
-                        <TableCell>{line.description}</TableCell>
-                        <TableCell align="right">{fmt(line.quantity)}</TableCell>
-                        <TableCell align="right">{fmt(line.unit_price)}</TableCell>
-                        <TableCell>
-                          <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                            {line.account_code} &mdash; {line.account_name}
-                          </Typography>
-                        </TableCell>
-                        <TableCell>{line.tax_code_name || '\u2014'}</TableCell>
-                        <TableCell align="right">{fmt(line.amount || '0')}</TableCell>
-                      </TableRow>
-                    ))}
+                    {(() => {
+                      const all = viewing.lines || [];
+                      const cur = viewing.currency || 'MAD';
+                      const rate = viewing.exchange_rate;
+                      const viewGroupTotal = (idx: number): number => {
+                        let s = 0;
+                        for (let j = idx + 1; j < all.length; j++) {
+                          if (all[j].is_text) break;
+                          s += lineSalesAmount(all[j]);
+                        }
+                        return s;
+                      };
+                      return all.map((line, i) => {
+                        if (line.is_hidden) return null;
+                        if (line.is_text) {
+                          const gt = viewGroupTotal(i);
+                          const antal = parseFloat(line.quantity || '0');
+                          const perUnit = antal > 0 ? gt / antal : 0;
+                          return (
+                            <TableRow key={i}>
+                              <TableCell sx={{ fontWeight: 600 }}>{line.description}</TableCell>
+                              <TableCell align="right">{antal > 0 ? fmt(line.quantity) : ''}</TableCell>
+                              <TableCell align="right">{antal > 0 ? fmtCur(perUnit, cur, rate) : ''}</TableCell>
+                              <TableCell colSpan={2} />
+                              <TableCell align="right" sx={{ fontWeight: 700 }}>{fmtCur(gt, cur, rate)}</TableCell>
+                            </TableRow>
+                          );
+                        }
+                        return (
+                          <TableRow key={i}>
+                            <TableCell>{line.description}</TableCell>
+                            <TableCell align="right">{fmt(line.quantity)}</TableCell>
+                            <TableCell align="right">{fmtCur(parseFloat(line.sales_price || '0'), cur, rate)}</TableCell>
+                            <TableCell>
+                              <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                                {line.account_code} &mdash; {line.account_name}
+                              </Typography>
+                            </TableCell>
+                            <TableCell>{line.tax_code_name || '\u2014'}</TableCell>
+                            <TableCell align="right">{fmtCur(lineSalesAmount(line), cur, rate)}</TableCell>
+                          </TableRow>
+                        );
+                      });
+                    })()}
                     {(!viewing.lines || viewing.lines.length === 0) && (
                       <TableRow>
                         <TableCell colSpan={6} align="center" sx={{ py: 3 }}>
@@ -977,33 +1243,185 @@ const Invoices: React.FC = () => {
                 </Table>
               </TableContainer>
 
-              {/* ---------- totals ---------- */}
-              <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
-                <Box sx={{ minWidth: 250 }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                    <Typography variant="body2">{t('common.subtotal') + ':'}</Typography>
-                    <Typography variant="body2" sx={{ fontWeight: 500 }}>{fmt(viewing.subtotal)}</Typography>
+              {/* ---------- totals (customer-facing, sales-based, in invoice currency) ---------- */}
+              {(() => {
+                const cur = viewing.currency || 'MAD';
+                const rate = viewing.exchange_rate;
+                const tot = salesTotals(viewing);
+                return (
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
+                    <Box sx={{ minWidth: 250 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                        <Typography variant="body2">{t('common.subtotal') + ':'}</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>{fmtCur(tot.subtotal, cur, rate)}</Typography>
+                      </Box>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                        <Typography variant="body2">{t('common.tax') + ':'}</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>{fmtCur(tot.tax, cur, rate)}</Typography>
+                      </Box>
+                      <Divider sx={{ my: 0.5 }} />
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                        <Typography variant="body1" sx={{ fontWeight: 700 }}>{t('common.total') + ':'}</Typography>
+                        <Typography variant="body1" sx={{ fontWeight: 700 }}>{fmtCur(tot.total, cur, rate)}</Typography>
+                      </Box>
+                    </Box>
                   </Box>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                    <Typography variant="body2">{t('common.tax') + ':'}</Typography>
-                    <Typography variant="body2" sx={{ fontWeight: 500 }}>{fmt(viewing.tax_amount)}</Typography>
-                  </Box>
-                  <Divider sx={{ my: 0.5 }} />
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                    <Typography variant="body1" sx={{ fontWeight: 700 }}>{t('common.total') + ':'}</Typography>
-                    <Typography variant="body1" sx={{ fontWeight: 700 }}>{fmt(viewing.total)}</Typography>
-                  </Box>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Typography variant="body2" color="text.secondary">{t('invoices.paid') + ':'}</Typography>
-                    <Typography variant="body2" color="text.secondary">{fmt(viewing.amount_paid)}</Typography>
-                  </Box>
-                </Box>
-              </Box>
+                );
+              })()}
             </>
           )}
         </DialogContent>
         <DialogActions>
+          <Button
+            startIcon={<PreviewIcon />}
+            onClick={() => { setViewDialogOpen(false); setPreviewOpen(true); }}
+          >
+            {t('invoices.preview')}
+          </Button>
           <Button onClick={() => setViewDialogOpen(false)}>{t('common.close')}</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ============================================================ */}
+      {/* Preview / Print Invoice Dialog                                */}
+      {/* ============================================================ */}
+      <GlobalStyles styles={{
+        '@media print': {
+          'body *': { visibility: 'hidden' },
+          '.invoice-print-area, .invoice-print-area *': { visibility: 'visible' },
+          '.invoice-print-area': { position: 'absolute', left: 0, top: 0, width: '100%', padding: '0 !important' },
+          '.no-print': { display: 'none !important' },
+        },
+      }} />
+      <Dialog open={previewOpen} onClose={() => setPreviewOpen(false)} maxWidth="md" fullWidth>
+        <DialogContent>
+          {viewing && (() => {
+            const cur = viewing.currency || 'MAD';
+            const rate = viewing.exchange_rate;
+            const cust = customers.find(c => c.id === viewing.customer_id);
+            const cs = companySettings || {};
+            const logoUrl = cs.logo2 || cs.logo || cs.logo_url;
+            const all = viewing.lines || [];
+            const groupTot = (idx: number): number => {
+              let s = 0;
+              for (let j = idx + 1; j < all.length; j++) {
+                if (all[j].is_text) break;
+                s += lineSalesAmount(all[j]);
+              }
+              return s;
+            };
+            const tot = salesTotals(viewing);
+            return (
+              <Box className="invoice-print-area" sx={{ p: 2, color: '#000' }}>
+                {/* Header: seller + invoice meta */}
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                  <Box>
+                    {logoUrl && (
+                      <Box component="img" src={logoUrl} alt="" sx={{ maxHeight: 64, mb: 1 }}
+                        onError={(e: any) => { e.target.style.display = 'none'; }} />
+                    )}
+                    <Typography variant="h6" sx={{ fontWeight: 700 }}>{cs.company_name || ''}</Typography>
+                    {cs.address && <Typography variant="body2">{cs.address}</Typography>}
+                    <Typography variant="body2">{[cs.city, cs.country].filter(Boolean).join(', ')}</Typography>
+                    {cs.tax_id && <Typography variant="body2">ICE: {cs.tax_id}</Typography>}
+                    {cs.phone && <Typography variant="body2">{cs.phone}</Typography>}
+                    {cs.email && <Typography variant="body2">{cs.email}</Typography>}
+                  </Box>
+                  <Box sx={{ textAlign: 'right' }}>
+                    <Typography variant="h4" sx={{ fontWeight: 700, letterSpacing: 1 }}>{t('invoices.invoiceDocTitle')}</Typography>
+                    <Typography variant="body2" sx={{ mt: 1 }}><strong>{t('invoices.invoiceNumber')}:</strong> {viewing.invoice_number}</Typography>
+                    <Typography variant="body2"><strong>{t('common.date')}:</strong> {formatDate(viewing.date)}</Typography>
+                    <Typography variant="body2"><strong>{t('invoices.dueDate')}:</strong> {formatDate(viewing.due_date)}</Typography>
+                    <Typography variant="body2"><strong>{t('common.currency')}:</strong> {cur}</Typography>
+                    {cur !== 'MAD' && (
+                      <Typography variant="caption" color="text.secondary">{t('invoices.rateHint', { cur })}: {rate}</Typography>
+                    )}
+                  </Box>
+                </Box>
+
+                {/* Bill to */}
+                <Box sx={{ mb: 2, p: 1.5, bgcolor: '#f7f7f7', borderRadius: 1 }}>
+                  <Typography variant="caption" color="text.secondary">{t('invoices.billTo')}</Typography>
+                  <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                    {viewing.customer_code && `${viewing.customer_code} — `}{viewing.customer_name}
+                  </Typography>
+                  {cust?.address && <Typography variant="body2">{cust.address}</Typography>}
+                  {cust?.tax_id && <Typography variant="body2">ICE: {cust.tax_id}</Typography>}
+                </Box>
+
+                {/* Lines */}
+                <Table size="small" sx={{ '& td, & th': { borderColor: '#ddd' } }}>
+                  <TableHead>
+                    <TableRow sx={{ bgcolor: '#f0f0f0' }}>
+                      <TableCell sx={{ fontWeight: 700 }}>{t('common.description')}</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700 }}>{t('invoices.quantity')}</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700 }}>{t('invoices.unitPrice')}</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700 }}>{t('common.amount')}</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {all.map((line, i) => {
+                      if (line.is_hidden) return null;
+                      if (line.is_text) {
+                        const gt = groupTot(i);
+                        const antal = parseFloat(line.quantity || '0');
+                        const perUnit = antal > 0 ? gt / antal : 0;
+                        return (
+                          <TableRow key={i}>
+                            <TableCell sx={{ fontWeight: 600 }}>{line.description}</TableCell>
+                            <TableCell align="right">{antal > 0 ? fmt(line.quantity) : ''}</TableCell>
+                            <TableCell align="right">{antal > 0 ? fmtCur(perUnit, cur, rate) : ''}</TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 700 }}>{fmtCur(gt, cur, rate)}</TableCell>
+                          </TableRow>
+                        );
+                      }
+                      return (
+                        <TableRow key={i}>
+                          <TableCell>{line.description}</TableCell>
+                          <TableCell align="right">{fmt(line.quantity)}</TableCell>
+                          <TableCell align="right">{fmtCur(parseFloat(line.sales_price || '0'), cur, rate)}</TableCell>
+                          <TableCell align="right">{fmtCur(lineSalesAmount(line), cur, rate)}</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+
+                {/* Totals */}
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
+                  <Box sx={{ minWidth: 260 }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                      <Typography variant="body2">{t('common.subtotal')}:</Typography>
+                      <Typography variant="body2">{fmtCur(tot.subtotal, cur, rate)}</Typography>
+                    </Box>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                      <Typography variant="body2">{t('common.tax')}:</Typography>
+                      <Typography variant="body2">{fmtCur(tot.tax, cur, rate)}</Typography>
+                    </Box>
+                    <Divider sx={{ my: 0.5 }} />
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <Typography variant="body1" sx={{ fontWeight: 700 }}>{t('common.total')}:</Typography>
+                      <Typography variant="body1" sx={{ fontWeight: 700 }}>{fmtCur(tot.total, cur, rate)}</Typography>
+                    </Box>
+                  </Box>
+                </Box>
+
+                {/* Notes */}
+                {viewing.notes && (
+                  <Box sx={{ mt: 3 }}>
+                    <Typography variant="caption" color="text.secondary">{t('invoices.remarks')}</Typography>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{viewing.notes}</Typography>
+                  </Box>
+                )}
+              </Box>
+            );
+          })()}
+        </DialogContent>
+        <DialogActions className="no-print">
+          <Button onClick={() => setPreviewOpen(false)}>{t('common.close')}</Button>
+          <Button variant="contained" startIcon={<PrintIcon />} onClick={() => window.print()}>
+            {t('invoices.printPdf')}
+          </Button>
         </DialogActions>
       </Dialog>
 

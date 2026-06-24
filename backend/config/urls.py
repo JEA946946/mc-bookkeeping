@@ -12,6 +12,9 @@ urlpatterns = [
     path("api/v1/", include("sales.urls")),
     path("api/v1/", include("purchases.urls")),
     path("api/v1/", include("core.urls")),
+    path("api/v1/", include("payroll.urls")),
+    # Read-only board endpoint for the external AI-board app (bearer-token auth)
+    path("api/board/", include("board.urls")),
 ]
 
 if settings.DEBUG:

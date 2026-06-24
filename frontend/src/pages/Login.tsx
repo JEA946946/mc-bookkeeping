@@ -19,11 +19,16 @@ const Login: React.FC = () => {
       setError(t('login.required'));
       return;
     }
-    const success = await login(username, password);
-    if (success) {
-      navigate('/dashboard');
-    } else {
-      setError(t('login.invalid'));
+    try {
+      const success = await login(username, password);
+      if (success) {
+        navigate('/dashboard');
+      } else {
+        setError('Login returned false — contact support');
+      }
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || err?.message || 'Unknown error';
+      setError(`Error: ${msg} (status: ${err?.response?.status || 'network'})`);
     }
   };
 
@@ -55,6 +60,9 @@ const Login: React.FC = () => {
         </form>
         <Typography variant="caption" color="text.secondary" sx={{ mt: 2, display: 'block', textAlign: 'center' }}>
           {t('login.credentialsNote')}
+        </Typography>
+        <Typography variant="caption" color="text.disabled" sx={{ mt: 1, display: 'block', textAlign: 'center', fontSize: '9px' }}>
+          v2.1
         </Typography>
       </Paper>
     </Box>

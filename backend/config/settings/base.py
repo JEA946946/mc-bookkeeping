@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "sales",
     "purchases",
     "core",
+    "payroll",
 ]
 
 MEDIA_URL = "media/"

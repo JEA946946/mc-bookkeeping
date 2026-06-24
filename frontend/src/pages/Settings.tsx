@@ -17,7 +17,9 @@ interface CompanySettings {
   currency: string;
   fiscal_year_start_month: number;
   date_format: string;
-  logo_url: string;
+  logo1: string;
+  logo2: string;
+  logo3: string;
 }
 
 const EMPTY_SETTINGS: CompanySettings = {
@@ -31,7 +33,9 @@ const EMPTY_SETTINGS: CompanySettings = {
   currency: 'MAD',
   fiscal_year_start_month: 1,
   date_format: 'DD-MM-YYYY',
-  logo_url: '',
+  logo1: '',
+  logo2: '',
+  logo3: '',
 };
 
 const DATE_FORMAT_OPTIONS = [
@@ -65,15 +69,13 @@ const Settings: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
-  const [logoFile, setLogoFile] = useState<File | null>(null);
-  const [logoPreview, setLogoPreview] = useState<string>('');
 
   const fetchSettings = async () => {
     setLoading(true);
     try {
       const res = await api.get('/settings');
       if (res.data.success) {
-        const data = res.data.data || res.data.settings || {};
+        const data = res.data.data?.settings ?? res.data.settings ?? res.data.data ?? {};
         setForm({
           company_name: data.company_name || '',
           address: data.address || '',
@@ -85,11 +87,10 @@ const Settings: React.FC = () => {
           currency: data.currency || 'MAD',
           fiscal_year_start_month: data.fiscal_year_start_month || 1,
           date_format: data.date_format || 'DD-MM-YYYY',
-          logo_url: data.logo_url || '',
+          logo1: data.logo1 || '',
+          logo2: data.logo2 || '',
+          logo3: data.logo3 || '',
         });
-        if (data.logo_url) {
-          setLogoPreview(data.logo_url);
-        }
       }
     } catch (err: any) {
       setError(err.response?.data?.message || t('settings.errorLoading'));
@@ -102,16 +103,18 @@ const Settings: React.FC = () => {
     fetchSettings();
   }, []);
 
-  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLogoChange = (slot: 'logo1' | 'logo2' | 'logo3') => (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setLogoFile(file);
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setLogoPreview(ev.target?.result as string);
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setError(t('settings.logoTooLarge'));
+      return;
     }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setForm(prev => ({ ...prev, [slot]: ev.target?.result as string }));
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleSave = async () => {
@@ -119,33 +122,13 @@ const Settings: React.FC = () => {
     setError('');
     setSuccess(false);
     try {
-      // Upload logo first if a new file was selected
-      let logoUrl = form.logo_url;
-      if (logoFile) {
-        const formData = new FormData();
-        formData.append('logo', logoFile);
-        try {
-          const uploadRes = await api.post('/settings/logo', formData, {
-            headers: { 'Content-Type': 'multipart/form-data' },
-          });
-          if (uploadRes.data.success) {
-            logoUrl = uploadRes.data.data?.logo_url || uploadRes.data.logo_url || logoUrl;
-          }
-        } catch (uploadErr: any) {
-          // If logo upload endpoint doesn't exist, continue with existing URL
-          console.warn('Logo upload failed:', uploadErr.response?.data?.message);
-        }
-      }
-
       const payload = {
         ...form,
-        logo_url: logoUrl,
         fiscal_year_start_month: Number(form.fiscal_year_start_month),
       };
       await api.put('/settings', payload);
       localStorage.setItem('bk_date_format', form.date_format);
       setSuccess(true);
-      setLogoFile(null);
       setTimeout(() => setSuccess(false), 3000);
     } catch (err: any) {
       setError(err.response?.data?.message || t('settings.errorSaving'));
@@ -287,44 +270,38 @@ const Settings: React.FC = () => {
             ))}
           </TextField>
 
-          {/* Logo Upload */}
+          {/* Logos */}
           <Box>
-            <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>{t('settings.logo')}</Typography>
-            <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-              {logoPreview && (
-                <Box
-                  component="img"
-                  src={logoPreview}
-                  alt="Logo"
-                  sx={{
-                    maxWidth: 150,
-                    maxHeight: 80,
-                    objectFit: 'contain',
-                    border: '1px solid #e0e0e0',
-                    borderRadius: 1,
-                    p: 0.5,
-                  }}
-                />
-              )}
-              <Button
-                variant="outlined"
-                component="label"
-                startIcon={<UploadIcon />}
-                size="small"
-              >
-                {t('settings.selectLogo')}
-                <input
-                  type="file"
-                  accept="image/*"
-                  hidden
-                  onChange={handleLogoChange}
-                />
-              </Button>
-              {logoFile && (
-                <Typography variant="caption" color="text.secondary">
-                  {logoFile.name}
-                </Typography>
-              )}
+            <Typography variant="body2" sx={{ fontWeight: 600, mb: 1 }}>{t('settings.logos')}</Typography>
+            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+              {([
+                { key: 'logo1' as const, label: t('settings.logo1') },
+                { key: 'logo2' as const, label: t('settings.logo2') },
+                { key: 'logo3' as const, label: t('settings.logo3') },
+              ]).map(slot => (
+                <Box key={slot.key} sx={{ display: 'flex', flexDirection: 'column', gap: 1, width: 180 }}>
+                  <Typography variant="caption" sx={{ fontWeight: 600 }}>{slot.label}</Typography>
+                  <Box sx={{ height: 80, border: '1px dashed #c0c0c0', borderRadius: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: '#fafafa' }}>
+                    {form[slot.key] ? (
+                      <Box component="img" src={form[slot.key]} alt={slot.label}
+                        sx={{ maxWidth: 160, maxHeight: 72, objectFit: 'contain', p: 0.5 }} />
+                    ) : (
+                      <Typography variant="caption" color="text.secondary">—</Typography>
+                    )}
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button variant="outlined" component="label" startIcon={<UploadIcon />} size="small">
+                      {t('settings.selectLogo')}
+                      <input type="file" accept="image/*" hidden onChange={handleLogoChange(slot.key)} />
+                    </Button>
+                    {form[slot.key] && (
+                      <Button size="small" color="error" onClick={() => setForm(prev => ({ ...prev, [slot.key]: '' }))}>
+                        {t('common.delete')}
+                      </Button>
+                    )}
+                  </Box>
+                </Box>
+              ))}
             </Box>
           </Box>
 

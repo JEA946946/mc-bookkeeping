@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Box, AppBar, Toolbar, Typography, Drawer, List, ListItemButton,
   ListItemIcon, ListItemText, IconButton, Avatar, Divider, Select, MenuItem,
@@ -29,10 +29,12 @@ import {
   ManageAccounts as ManageAccountsIcon,
   RequestQuote as RequestQuoteIcon,
   MenuBook as MenuBookIcon,
+  Badge as BadgeIcon,
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { useTranslation } from 'react-i18next';
+import api from '../../services/api';
 
 const SIDEBAR_WIDTH = 220;
 const APPBAR_HEIGHT = 48;
@@ -51,6 +53,16 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const location = useLocation();
   const { user, logout } = useAuth();
   const { t, i18n } = useTranslation();
+
+  const [siteLogo, setSiteLogo] = useState<string>('');
+  useEffect(() => {
+    api.get('/settings').then(res => {
+      if (res.data.success) {
+        const d = res.data.data?.settings ?? res.data.settings ?? res.data.data ?? {};
+        setSiteLogo(d.logo1 || '');
+      }
+    }).catch(() => { /* ignore */ });
+  }, []);
 
   const handleLogout = () => {
     logout();
@@ -81,6 +93,12 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         { text: t('sidebar.suppliers'), icon: <StoreIcon fontSize="small" />, path: '/suppliers' },
         { text: t('sidebar.bills'), icon: <RequestQuoteIcon fontSize="small" />, path: '/bills' },
         { text: t('sidebar.expenses'), icon: <ShoppingCartIcon fontSize="small" />, path: '/expenses' },
+      ],
+    },
+    {
+      label: t('sidebar.payroll'),
+      items: [
+        { text: t('sidebar.payrollOverview'), icon: <BadgeIcon fontSize="small" />, path: '/payroll' },
       ],
     },
     {
@@ -148,6 +166,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         sx={{ zIndex: (theme) => theme.zIndex.drawer + 1, height: APPBAR_HEIGHT, bgcolor: '#2e7d32' }}
       >
         <Toolbar variant="dense" sx={{ minHeight: APPBAR_HEIGHT, height: APPBAR_HEIGHT }}>
+          {siteLogo && (
+            <Box component="img" src={siteLogo} alt=""
+              sx={{ height: 30, maxWidth: 140, objectFit: 'contain', mr: 1.5 }}
+              onError={(e: any) => { e.target.style.display = 'none'; }} />
+          )}
           <Typography variant="h6" noWrap sx={{ fontWeight: 'bold', fontSize: '16px', mr: 3 }}>
             DMC Bookkeeping
           </Typography>

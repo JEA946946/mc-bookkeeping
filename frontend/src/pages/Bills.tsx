@@ -13,6 +13,7 @@ import {
   Download as DownloadIcon, Upload as UploadIcon,
   Search as SearchIcon, Clear as ClearIcon,
   ArrowUpward as ArrowUpIcon, ArrowDownward as ArrowDownIcon,
+  DriveFileMove as MoveIcon,
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import api from '../services/api';
@@ -62,7 +63,7 @@ interface Bill {
   subtotal: string;
   tax_amount: string;
   total: string;
-  amount_paid: string;
+  paid_amount: string;
   vat_quarter?: number;
   vat_year?: number;
   lines?: BillLine[];
@@ -105,6 +106,11 @@ const Bills: React.FC = () => {
   const [importOpen, setImportOpen] = useState(false);
   const [editing, setEditing] = useState<Bill | null>(null);
   const [viewing, setViewing] = useState<Bill | null>(null);
+
+  // New supplier inline creation
+  const [newSupplierOpen, setNewSupplierOpen] = useState(false);
+  const [newSupplierName, setNewSupplierName] = useState('');
+  const [newSupplierAccount, setNewSupplierAccount] = useState('');
 
   // Filter state
   const [filterStatus, setFilterStatus] = useState('');
@@ -403,6 +409,46 @@ const Bills: React.FC = () => {
     }
   };
 
+  const handleMoveToExpenses = async (id: string) => {
+    if (!window.confirm(t('bills.moveToExpensesConfirm'))) return;
+    try {
+      await api.post(`/bills/${id}/move-to-expenses`);
+      setDialogOpen(false);
+      setViewDialogOpen(false);
+      fetchBills();
+    } catch (err: any) {
+      alert(err.response?.data?.message || t('bills.errorMoving'));
+    }
+  };
+
+  const handleCreateSupplier = async () => {
+    if (!newSupplierName.trim()) return;
+    try {
+      const res = await api.post('/suppliers', {
+        name: newSupplierName.trim(),
+        default_account_id: newSupplierAccount || undefined,
+      });
+      if (res.data.success) {
+        const created = res.data.data.supplier;
+        // Refresh suppliers list and select the new one
+        const supRes = await api.get('/suppliers');
+        if (supRes.data.success) setSuppliers(supRes.data.data.suppliers);
+        setForm(prev => ({ ...prev, supplier_id: created.id }));
+        // Auto-fill account on lines
+        if (created.default_account_id) {
+          setLines(prev => prev.map(l =>
+            l.account_id ? l : { ...l, account_id: created.default_account_id }
+          ));
+        }
+        setNewSupplierOpen(false);
+        setNewSupplierName('');
+        setNewSupplierAccount('');
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.message || t('suppliers.errorSaving'));
+    }
+  };
+
   const updateLine = (index: number, field: keyof BillLine, value: string) => {
     setLines(prev =>
       prev.map((l, i) => {
@@ -607,7 +653,7 @@ const Bills: React.FC = () => {
                   {parseFloat(bill.total).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}
                 </TableCell>
                 <TableCell align="right">
-                  {parseFloat(bill.amount_paid).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}
+                  {parseFloat(bill.paid_amount).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}
                 </TableCell>
                 <TableCell>
                   <Chip
@@ -628,7 +674,7 @@ const Bills: React.FC = () => {
                       <ViewIcon sx={{ fontSize: 16 }} />
                     </IconButton>
                   </Tooltip>
-                  {bill.status === 'draft' && (
+                  {(bill.status === 'draft' || bill.status === 'approved') && (
                     <Tooltip title={t('common.edit')}>
                       <IconButton size="small" onClick={() => handleOpen(bill)}>
                         <EditIcon sx={{ fontSize: 16 }} />
@@ -647,6 +693,13 @@ const Bills: React.FC = () => {
                           <ApproveIcon sx={{ fontSize: 16 }} />
                         </IconButton>
                       </span>
+                    </Tooltip>
+                  )}
+                  {bill.status === 'draft' && (
+                    <Tooltip title={t('bills.moveToExpenses')}>
+                      <IconButton size="small" color="warning" onClick={() => handleMoveToExpenses(bill.id)}>
+                        <MoveIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
                     </Tooltip>
                   )}
                   {bill.status === 'draft' && (
@@ -681,28 +734,67 @@ const Bills: React.FC = () => {
       </TableContainer>
 
       {/* Create/Edit Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="lg" fullWidth>
         <DialogTitle>{editing ? t('bills.editBill', { number: editing.bill_number }) : t('bills.newBill')}</DialogTitle>
         <DialogContent>
+          {editing?.status === 'approved' && (
+            <Box sx={{ mt: 1, mb: 1, p: 1, bgcolor: '#fff3e0', borderRadius: 1, border: '1px solid #ffe0b2' }}>
+              <Typography variant="body2" sx={{ color: '#e65100' }}>
+                {t('bills.editApprovedNote')}
+              </Typography>
+            </Box>
+          )}
           <Box sx={{ display: 'flex', gap: 2, mt: 1, mb: 2, flexWrap: 'wrap' }}>
             <Autocomplete
-              options={suppliers}
-              getOptionLabel={(s) => `${s.code} — ${s.name}`}
+              options={[...suppliers, { id: '__new__', code: '', name: '' } as Supplier]}
+              getOptionLabel={(s) => s.id === '__new__' ? `+ ${t('bills.addNewSupplier')}` : `${s.code} — ${s.name}`}
               value={suppliers.find(s => s.id === form.supplier_id) || null}
               onChange={(_, v) => {
+                if (v?.id === '__new__') {
+                  setNewSupplierName('');
+                  setNewSupplierAccount('');
+                  setNewSupplierOpen(true);
+                  return;
+                }
                 setForm({ ...form, supplier_id: v?.id || '' });
-                // Auto-fill account on lines that don't have one yet
                 if (v?.default_account_id) {
                   setLines(prev => prev.map(l =>
                     l.account_id ? l : { ...l, account_id: v.default_account_id! }
                   ));
                 }
               }}
+              filterOptions={(options, state) => {
+                const input = state.inputValue.toLowerCase();
+                const addNew = options.find(s => s.id === '__new__')!;
+                const real = options.filter(s => s.id !== '__new__');
+                const filtered = input
+                  ? real.filter(s =>
+                      s.name.toLowerCase().includes(input) || s.code.toLowerCase().includes(input)
+                    ).slice(0, 50)
+                  : real.slice(0, 50);
+                filtered.push(addNew);
+                return filtered;
+              }}
+              renderOption={(props, s) => (
+                <li {...props} key={s.id} style={s.id === '__new__' ? { ...props.style, borderTop: '1px solid #e0e0e0' } : props.style}>
+                  {s.id === '__new__' ? (
+                    <Typography variant="body2" sx={{ color: 'primary.main', fontWeight: 600 }}>
+                      + {t('bills.addNewSupplier')}
+                    </Typography>
+                  ) : (
+                    <Typography variant="body2">
+                      <span style={{ fontFamily: 'monospace', marginRight: 8 }}>{s.code}</span>
+                      {s.name}
+                    </Typography>
+                  )}
+                </li>
+              )}
               renderInput={(params) => (
                 <TextField {...params} label={t('bills.supplier')} size="small" />
               )}
               sx={{ width: 300 }}
               size="small"
+              isOptionEqualToValue={(option, value) => option.id === value.id}
             />
             <TextField
               label={t('common.date')} type="date" value={form.date} size="small"
@@ -788,18 +880,29 @@ const Bills: React.FC = () => {
                       />
                     </TableCell>
                     <TableCell sx={{ p: 0.5 }}>
-                      <TextField
-                        select value={line.account_id} size="small" fullWidth
-                        onChange={e => updateLine(i, 'account_id', e.target.value)}
-                      >
-                        <MenuItem value="">—</MenuItem>
-                        {accounts.map(a => (
-                          <MenuItem key={a.id} value={a.id}>
+                      <Autocomplete
+                        size="small"
+                        fullWidth
+                        options={accounts}
+                        value={accounts.find(a => a.id === line.account_id) || null}
+                        onChange={(_e, val) => updateLine(i, 'account_id', val?.id || '')}
+                        getOptionLabel={(a) => `${a.code} ${a.name}`}
+                        filterOptions={(options, state) => {
+                          const input = state.inputValue.toLowerCase();
+                          if (!input) return options.slice(0, 50);
+                          return options.filter(a =>
+                            a.name.toLowerCase().includes(input) || a.code.toLowerCase().includes(input)
+                          ).slice(0, 50);
+                        }}
+                        renderOption={(props, a) => (
+                          <li {...props} key={a.id}>
                             <Typography variant="body2" component="span" sx={{ fontFamily: 'monospace', mr: 1 }}>{a.code}</Typography>
                             {a.name}
-                          </MenuItem>
-                        ))}
-                      </TextField>
+                          </li>
+                        )}
+                        renderInput={(params) => <TextField {...params} placeholder="—" />}
+                        isOptionEqualToValue={(option, value) => option.id === value.id}
+                      />
                     </TableCell>
                     <TableCell sx={{ p: 0.5 }}>
                       <TextField
@@ -856,9 +959,60 @@ const Bills: React.FC = () => {
           </Button>
         </DialogContent>
         <DialogActions>
+          {editing?.status === 'draft' && (
+            <Button variant="outlined" color="warning" startIcon={<MoveIcon />} onClick={() => handleMoveToExpenses(editing.id)}>
+              {t('bills.moveToExpenses')}
+            </Button>
+          )}
+          <Box sx={{ flex: 1 }} />
           <Button onClick={() => setDialogOpen(false)}>{t('common.cancel')}</Button>
           <Button variant="contained" onClick={handleSave} sx={{ bgcolor: '#2e7d32' }}>
             {editing ? t('common.update') : t('common.save')}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* New Supplier Dialog */}
+      <Dialog open={newSupplierOpen} onClose={() => setNewSupplierOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>{t('bills.addNewSupplier')}</DialogTitle>
+        <DialogContent>
+          <TextField
+            label={t('suppliers.title').replace(/s$/, '')}
+            value={newSupplierName}
+            onChange={e => setNewSupplierName(e.target.value)}
+            size="small"
+            fullWidth
+            autoFocus
+            sx={{ mt: 1, mb: 2 }}
+            onKeyDown={e => { if (e.key === 'Enter') handleCreateSupplier(); }}
+          />
+          <Autocomplete
+            options={accounts}
+            getOptionLabel={(a) => `${a.code} ${a.name}`}
+            value={accounts.find(a => a.id === newSupplierAccount) || null}
+            onChange={(_, v) => setNewSupplierAccount(v?.id || '')}
+            filterOptions={(options, state) => {
+              const input = state.inputValue.toLowerCase();
+              if (!input) return options.slice(0, 50);
+              return options.filter(a =>
+                a.name.toLowerCase().includes(input) || a.code.toLowerCase().includes(input)
+              ).slice(0, 50);
+            }}
+            renderOption={(props, a) => (
+              <li {...props} key={a.id}>
+                <Typography variant="body2" component="span" sx={{ fontFamily: 'monospace', mr: 1 }}>{a.code}</Typography>
+                {a.name}
+              </li>
+            )}
+            renderInput={(params) => <TextField {...params} label={t('suppliers.defaultAccount')} size="small" />}
+            size="small"
+            isOptionEqualToValue={(option, value) => option.id === value.id}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setNewSupplierOpen(false)}>{t('common.cancel')}</Button>
+          <Button variant="contained" onClick={handleCreateSupplier} disabled={!newSupplierName.trim()} sx={{ bgcolor: '#2e7d32' }}>
+            {t('common.save')}
           </Button>
         </DialogActions>
       </Dialog>
@@ -946,7 +1100,7 @@ const Bills: React.FC = () => {
                 <TableRow>
                   <TableCell colSpan={5} align="right" sx={{ fontWeight: 600 }}>{t('bills.amountPaid')}:</TableCell>
                   <TableCell align="right" sx={{ fontWeight: 600 }}>
-                    {viewing ? parseFloat(viewing.amount_paid).toLocaleString(i18n.language, { minimumFractionDigits: 2 }) : ''}
+                    {viewing ? parseFloat(viewing.paid_amount).toLocaleString(i18n.language, { minimumFractionDigits: 2 }) : ''}
                   </TableCell>
                 </TableRow>
               </TableBody>
@@ -954,6 +1108,11 @@ const Bills: React.FC = () => {
           </TableContainer>
         </DialogContent>
         <DialogActions>
+          {viewing?.status === 'draft' && (
+            <Button color="warning" startIcon={<MoveIcon />} onClick={() => handleMoveToExpenses(viewing.id)}>
+              {t('bills.moveToExpenses')}
+            </Button>
+          )}
           <Button onClick={() => setViewDialogOpen(false)}>{t('common.close')}</Button>
         </DialogActions>
       </Dialog>

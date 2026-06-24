@@ -17,7 +17,7 @@ from rest_framework.response import Response
 
 from accounts.models import Account
 from journals.models import JournalEntry, JournalEntryLine
-from .models import Supplier, Bill, BillLine, Expense
+from .models import Supplier, Bill, BillLine, BillPaymentLink, Expense
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
@@ -274,7 +274,7 @@ def suppliers_list_create(request):
         address=data.get("address", ""),
         tax_id=data.get("tax_id", ""),
         currency=data.get("currency", "MAD"),
-        payment_terms=data.get("payment_terms", 30),
+        payment_terms=int(data["payment_terms"]) if data.get("payment_terms") else 30,
         notes=data.get("notes", ""),
         default_account_id=default_account_id,
         is_active=data.get("is_active", True),
@@ -313,9 +313,11 @@ def suppliers_detail(request, pk):
                 )
             supplier.code = data["code"]
         for field in ("name", "email", "phone", "address", "tax_id",
-                      "currency", "payment_terms", "notes", "is_active"):
+                      "currency", "notes", "is_active"):
             if field in data:
                 setattr(supplier, field, data[field])
+        if "payment_terms" in data:
+            supplier.payment_terms = int(data["payment_terms"]) if data["payment_terms"] else 30
         if "default_account_id" in data:
             supplier.default_account_id = data["default_account_id"] or None
         supplier.save()
@@ -595,24 +597,29 @@ def bills_detail(request, pk):
         bill.delete()
         return Response({"success": True, "message": "Bill deleted"})
 
-    # PUT — update
-    if bill.status not in ("draft",):
+    # PUT — update. Draft and approved bills can be edited. Editing an
+    # approved bill re-syncs its journal entry so the books stay consistent.
+    # Paid bills are locked because they have linked payments.
+    if bill.status not in ("draft", "approved"):
         return Response(
-            {"success": False, "message": "Only draft bills can be edited"},
+            {"success": False, "message": "Only draft and approved bills can be edited"},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     data = request.data
 
     if "supplier_id" in data:
-        try:
-            supplier = Supplier.objects.get(id=data["supplier_id"])
-            bill.supplier = supplier
-        except Supplier.DoesNotExist:
-            return Response(
-                {"success": False, "message": "Supplier not found"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        if data["supplier_id"]:
+            try:
+                supplier = Supplier.objects.get(id=data["supplier_id"])
+                bill.supplier = supplier
+            except Supplier.DoesNotExist:
+                return Response(
+                    {"success": False, "message": "Supplier not found"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            bill.supplier = None
 
     for field in ("date", "due_date", "currency", "reference", "notes"):
         if field in data:
@@ -687,12 +694,74 @@ def bills_detail(request, pk):
     else:
         bill.save()
 
+    # Keep the journal entry in sync when an approved bill is edited.
+    if bill.status == "approved":
+        ok, err = _resync_bill_journal(bill)
+        if not ok:
+            return Response(
+                {"success": False, "message": err},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     bill.refresh_from_db()
     return Response({
         "success": True,
         "message": "Bill updated",
         "data": {"bill": _bill_dict(bill)},
     })
+
+
+def _post_bill_journal_lines(entry, bill, ap_account):
+    """Create the journal entry lines for a bill on the given (empty) entry.
+
+    DR expense accounts (grouped) + DR tax account, CR Accounts Payable.
+    """
+    lines = bill.lines.select_related("account", "tax_code").all()
+
+    account_totals = {}
+    total_tax = Decimal("0")
+    tax_account = None
+
+    for line in lines:
+        acct_id = str(line.account_id)
+        if acct_id not in account_totals:
+            account_totals[acct_id] = {
+                "account": line.account,
+                "amount": Decimal("0"),
+            }
+        account_totals[acct_id]["amount"] += line.amount
+
+        if line.tax_code:
+            line_tax = line.amount * line.tax_code.rate / Decimal("100")
+            total_tax += line_tax
+            if not tax_account:
+                tax_account = line.tax_code.account
+
+    for acct_id, info in account_totals.items():
+        JournalEntryLine.objects.create(
+            journal_entry=entry,
+            account=info["account"],
+            debit=info["amount"],
+            credit=Decimal("0"),
+            description=f"Bill {bill.bill_number}",
+        )
+
+    if total_tax > 0 and tax_account:
+        JournalEntryLine.objects.create(
+            journal_entry=entry,
+            account=tax_account,
+            debit=total_tax,
+            credit=Decimal("0"),
+            description=f"Tax on Bill {bill.bill_number}",
+        )
+
+    JournalEntryLine.objects.create(
+        journal_entry=entry,
+        account=ap_account,
+        debit=Decimal("0"),
+        credit=bill.total,
+        description=f"Bill {bill.bill_number} — {bill.supplier.name}",
+    )
 
 
 def _approve_bill(bill, created_by):
@@ -727,54 +796,40 @@ def _approve_bill(bill, created_by):
             created_by=created_by,
         )
 
-        account_totals = {}
-        total_tax = Decimal("0")
-        tax_account = None
-
-        for line in lines:
-            acct_id = str(line.account_id)
-            if acct_id not in account_totals:
-                account_totals[acct_id] = {
-                    "account": line.account,
-                    "amount": Decimal("0"),
-                }
-            account_totals[acct_id]["amount"] += line.amount
-
-            if line.tax_code:
-                line_tax = line.amount * line.tax_code.rate / Decimal("100")
-                total_tax += line_tax
-                if not tax_account:
-                    tax_account = line.tax_code.account
-
-        for acct_id, info in account_totals.items():
-            JournalEntryLine.objects.create(
-                journal_entry=entry,
-                account=info["account"],
-                debit=info["amount"],
-                credit=Decimal("0"),
-                description=f"Bill {bill.bill_number}",
-            )
-
-        if total_tax > 0 and tax_account:
-            JournalEntryLine.objects.create(
-                journal_entry=entry,
-                account=tax_account,
-                debit=total_tax,
-                credit=Decimal("0"),
-                description=f"Tax on Bill {bill.bill_number}",
-            )
-
-        JournalEntryLine.objects.create(
-            journal_entry=entry,
-            account=ap_account,
-            debit=Decimal("0"),
-            credit=bill.total,
-            description=f"Bill {bill.bill_number} — {bill.supplier.name}",
-        )
+        _post_bill_journal_lines(entry, bill, ap_account)
 
         bill.status = "approved"
         bill.journal_entry = entry
         bill.save()
+
+    return True, None
+
+
+def _resync_bill_journal(bill):
+    """Rebuild the journal entry of an already-approved bill after edits.
+
+    Returns (True, None) on success or (False, "error message") on failure.
+    The rebuild runs in a transaction so a failure leaves the old entry intact.
+    """
+    entry = bill.journal_entry
+    if entry is None:
+        return True, None
+
+    if not bill.supplier:
+        return False, "Supplier must be assigned"
+
+    try:
+        ap_account = Account.objects.get(code="200000")
+    except Account.DoesNotExist:
+        return False, "Accounts Payable account (200000) not found"
+
+    with transaction.atomic():
+        entry.date = bill.date
+        entry.description = f"Bill {bill.bill_number} — {bill.supplier.name}"
+        entry.reference = bill.bill_number
+        entry.save()
+        entry.lines.all().delete()
+        _post_bill_journal_lines(entry, bill, ap_account)
 
     return True, None
 
@@ -844,6 +899,70 @@ def bills_bulk_approve(request):
         "success": True,
         "approved_count": approved_count,
         "errors": errors,
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bill_move_to_expenses(request, pk):
+    """Move a draft bill to expenses: create one Expense per BillLine, then delete the bill."""
+    try:
+        bill = Bill.objects.get(id=pk)
+    except Bill.DoesNotExist:
+        return Response(
+            {"success": False, "message": "Bill not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    if bill.status != "draft":
+        return Response(
+            {"success": False, "message": "Only draft bills can be moved to expenses"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    lines = bill.lines.select_related("account", "tax_code").all()
+    if not lines:
+        return Response(
+            {"success": False, "message": "Bill has no lines"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Validate all lines have an account
+    missing = [i + 1 for i, line in enumerate(lines) if not line.account_id]
+    if missing:
+        return Response(
+            {"success": False, "message": f"All bill lines must have an account. Lines missing account: {missing}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    created_by = (
+        f"{request.user.first_name} {request.user.last_name}".strip()
+        or request.user.username
+    )
+
+    reference = bill.reference or bill.bill_number
+
+    with transaction.atomic():
+        for line in lines:
+            Expense.objects.create(
+                date=bill.date,
+                supplier=bill.supplier,
+                description=line.description or f"From bill {bill.bill_number}",
+                amount=line.amount,
+                tax_code=line.tax_code,
+                account=line.account,
+                payment_method="bank_transfer",
+                reference=reference,
+                status="pending",
+                created_by=created_by,
+            )
+        expense_count = len(lines)
+        bill.delete()
+
+    return Response({
+        "success": True,
+        "message": f"Bill moved to {expense_count} expense(s)",
+        "data": {"expense_count": expense_count},
     })
 
 
@@ -1692,3 +1811,351 @@ def bills_import_confirm(request):
             {"success": False, "message": f"Import error: {str(e)}"},
             status=400,
         )
+
+
+# ─── Bill Matching (Regningsafstemning) ──────────────────────────────────────
+
+_STOP_WORDS = frozenset({
+    "de", "du", "le", "la", "les", "en", "et", "au", "aux", "des", "un", "une",
+    "the", "of", "and", "in", "to", "for", "at", "by", "on", "with", "from",
+    "og", "i", "til", "fra", "med", "den", "det", "er", "en", "af", "på",
+    "virement", "emis", "faveur", "commission", "recu", "commercial",
+    "reception", "rapatriement", "instantane",
+    "sarl", "srl", "sa", "llc", "ltd", "inc",
+})
+
+
+def _score_bill_match(bill, amount, txn_date, description, reference):
+    """Score how well a bill matches a bank transaction (0–100)."""
+    import datetime as _dt
+    import re
+    score = 0
+    description_lower = (description or "").lower()
+    reference_lower = (reference or "").lower()
+
+    # --- Amount (max 40 pts) ---
+    bill_balance = bill.balance_due
+    if bill_balance and amount:
+        try:
+            diff_pct = abs(float(amount) - float(bill_balance)) / float(bill_balance) * 100
+        except (ZeroDivisionError, ValueError):
+            diff_pct = 100
+        if diff_pct == 0:
+            score += 40
+        elif diff_pct <= 1:
+            score += 32
+        elif diff_pct <= 5:
+            score += 20
+        elif diff_pct <= 10:
+            score += 8
+
+    # --- Date proximity (max 20 pts) ---
+    if txn_date and bill.date:
+        try:
+            if isinstance(txn_date, str):
+                txn_date_parsed = _dt.date.fromisoformat(txn_date.split("T")[0])
+            else:
+                txn_date_parsed = txn_date
+            day_diff = abs((txn_date_parsed - bill.date).days)
+            if day_diff == 0:
+                score += 20
+            elif day_diff <= 7:
+                score += 15
+            elif day_diff <= 30:
+                score += 10
+            elif day_diff <= 60:
+                score += 5
+        except (ValueError, TypeError):
+            pass
+
+    # --- Supplier name in description (max 15 pts) ---
+    if bill.supplier and description_lower:
+        supplier_name = bill.supplier.name.lower()
+        if supplier_name and supplier_name in description_lower:
+            score += 15
+        elif supplier_name:
+            words = [w for w in supplier_name.split() if len(w) > 2 and w not in _STOP_WORDS]
+            if words:
+                matched = sum(1 for w in words if w in description_lower)
+                score += min(10, int(matched / len(words) * 10))
+
+    # --- Reference match (max 10 pts) ---
+    bill_ref = (bill.reference or "").lower()
+    bill_number = (bill.bill_number or "").lower()
+    combined = description_lower + " " + reference_lower
+    if bill_ref and bill_ref in combined:
+        score += 10
+    elif bill_number and bill_number in combined:
+        score += 10
+
+    # --- Text / word overlap (max 15 pts) ---
+    # Collect meaningful words from the bank transaction description
+    txn_words = set(re.findall(r"[a-zà-ÿ]{3,}", description_lower + " " + reference_lower))
+    txn_words -= _STOP_WORDS
+
+    if txn_words:
+        # Build text from bill reference, notes, and line descriptions
+        bill_text_parts = []
+        if bill.reference:
+            bill_text_parts.append(bill.reference.lower())
+        if bill.notes:
+            bill_text_parts.append(bill.notes.lower())
+        if bill.supplier:
+            bill_text_parts.append(bill.supplier.name.lower())
+        # Include bill line descriptions (prefetched or queried)
+        try:
+            for line in bill.lines.all():
+                if line.description:
+                    bill_text_parts.append(line.description.lower())
+        except Exception:
+            pass
+
+        bill_text = " ".join(bill_text_parts)
+        if bill_text:
+            bill_words = set(re.findall(r"[a-zà-ÿ]{3,}", bill_text))
+            bill_words -= _STOP_WORDS
+
+            if bill_words:
+                overlap = txn_words & bill_words
+                if overlap:
+                    # Score based on overlap ratio relative to the smaller set
+                    ratio = len(overlap) / min(len(txn_words), len(bill_words))
+                    score += min(15, int(ratio * 15))
+
+    return score
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def bill_linked_transaction_ids(request):
+    """Return all journal_entry_line IDs that have been linked to a bill."""
+    ids = list(
+        BillPaymentLink.objects.values_list("journal_entry_line_id", flat=True)
+    )
+    return Response({
+        "success": True,
+        "data": {"linked_ids": [str(i) for i in ids]},
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bill_match_suggestions(request):
+    """Return bills sorted by match score for a given bank transaction."""
+    amount = request.data.get("amount")
+    txn_date = request.data.get("date")
+    description = request.data.get("description", "")
+    reference = request.data.get("reference", "")
+
+    try:
+        amount = Decimal(str(amount)) if amount else Decimal("0")
+    except (InvalidOperation, TypeError):
+        amount = Decimal("0")
+
+    bills = Bill.objects.filter(
+        status__in=("draft", "approved"),
+    ).select_related("supplier").prefetch_related("lines")
+
+    # Only include bills with balance_due > 0
+    results = []
+    for bill in bills:
+        if bill.balance_due <= 0:
+            continue
+        score = _score_bill_match(bill, amount, txn_date, description, reference)
+        if score > 0:
+            d = _bill_dict(bill, include_lines=False)
+            d["match_score"] = score
+            results.append(d)
+
+    results.sort(key=lambda x: x["match_score"], reverse=True)
+
+    return Response({
+        "success": True,
+        "data": {"suggestions": results},
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bill_auto_match(request):
+    """Auto-match a list of bank transactions to bills.
+
+    For each transaction, finds the single best bill with score >= min_score.
+    Only matches when exactly one bill scores above threshold (unambiguous).
+
+    Set preview=true to return proposals without recording them.
+    """
+    transactions = request.data.get("transactions", [])
+    min_score = int(request.data.get("min_score", 70))
+    preview = request.data.get("preview", False)
+
+    if not transactions:
+        return Response(
+            {"success": False, "message": "transactions list is required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    bills = list(
+        Bill.objects.filter(status__in=("draft", "approved"))
+        .select_related("supplier").prefetch_related("lines")
+    )
+    # Filter to bills with remaining balance
+    open_bills = [b for b in bills if b.balance_due > 0]
+
+    matched_by = (
+        f"{request.user.first_name} {request.user.last_name}".strip()
+        or request.user.username
+    )
+
+    matches = []
+    # Track bills already matched in this batch to avoid double-matching
+    matched_bill_ids = set()
+
+    for txn in transactions:
+        txn_id = txn.get("id")
+        try:
+            amount = Decimal(str(txn.get("amount", 0)))
+        except (InvalidOperation, TypeError):
+            continue
+        txn_date = txn.get("date", "")
+        description = txn.get("description", "")
+        reference = txn.get("reference", "")
+
+        # Score all open bills
+        scored = []
+        for bill in open_bills:
+            if str(bill.id) in matched_bill_ids:
+                continue
+            score = _score_bill_match(bill, amount, txn_date, description, reference)
+            if score >= min_score:
+                scored.append((bill, score))
+
+        if not scored:
+            continue
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        best_bill, best_score = scored[0]
+
+        # Only auto-match if the best score is clearly ahead (at least 10pts above second)
+        if len(scored) >= 2 and scored[0][1] - scored[1][1] < 10:
+            continue
+
+        # Check this journal_entry_line hasn't already been linked
+        already_linked = BillPaymentLink.objects.filter(
+            journal_entry_line_id=txn_id
+        ).exists()
+        if already_linked:
+            continue
+
+        matched_bill_ids.add(str(best_bill.id))
+        matches.append({
+            "transaction_id": txn_id,
+            "transaction_description": description,
+            "transaction_date": txn_date,
+            "bill_id": str(best_bill.id),
+            "bill_number": best_bill.bill_number,
+            "supplier_name": best_bill.supplier.name if best_bill.supplier else None,
+            "score": best_score,
+            "amount": str(amount),
+        })
+
+    if preview:
+        return Response({
+            "success": True,
+            "message": f"{len(matches)} potential matches found",
+            "data": {"matches": matches, "count": len(matches)},
+        })
+
+    # Execute the confirmed matches
+    executed = []
+    for m in matches:
+        try:
+            jel = JournalEntryLine.objects.get(id=m["transaction_id"])
+            bill = Bill.objects.get(id=m["bill_id"])
+            amt = Decimal(m["amount"])
+        except (JournalEntryLine.DoesNotExist, Bill.DoesNotExist):
+            continue
+
+        try:
+            with transaction.atomic():
+                BillPaymentLink.objects.create(
+                    bill=bill,
+                    journal_entry_line=jel,
+                    amount=amt,
+                    matched_by=f"{matched_by} (auto)",
+                )
+                bill.paid_amount += amt
+                if bill.paid_amount >= bill.total:
+                    bill.status = "paid"
+                bill.save()
+            executed.append(m)
+        except Exception:
+            continue
+
+    return Response({
+        "success": True,
+        "message": f"{len(executed)} transactions auto-matched",
+        "data": {"matches": executed, "count": len(executed)},
+    })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bill_record_payment(request, pk):
+    """Record a payment on a bill by linking it to a journal entry line."""
+    try:
+        bill = Bill.objects.get(id=pk)
+    except Bill.DoesNotExist:
+        return Response(
+            {"success": False, "message": "Bill not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    jel_id = request.data.get("journal_entry_line_id")
+    amount = request.data.get("amount")
+
+    if not jel_id or not amount:
+        return Response(
+            {"success": False, "message": "journal_entry_line_id and amount are required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        amount = Decimal(str(amount))
+    except (InvalidOperation, TypeError):
+        return Response(
+            {"success": False, "message": "Invalid amount"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        jel = JournalEntryLine.objects.get(id=jel_id)
+    except JournalEntryLine.DoesNotExist:
+        return Response(
+            {"success": False, "message": "Journal entry line not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    matched_by = (
+        f"{request.user.first_name} {request.user.last_name}".strip()
+        or request.user.username
+    )
+
+    with transaction.atomic():
+        BillPaymentLink.objects.create(
+            bill=bill,
+            journal_entry_line=jel,
+            amount=amount,
+            matched_by=matched_by,
+        )
+        bill.paid_amount += amount
+        if bill.paid_amount >= bill.total:
+            bill.status = "paid"
+        bill.save()
+
+    bill.refresh_from_db()
+    return Response({
+        "success": True,
+        "message": "Payment recorded",
+        "data": {"bill": _bill_dict(bill, include_lines=False)},
+    })

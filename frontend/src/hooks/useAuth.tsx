@@ -45,11 +45,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (res.data.success) setUser(res.data.data.user);
           }).catch(() => {
             localStorage.removeItem('bk_token');
+            localStorage.removeItem('bk_refreshToken');
             setToken(null);
           }).finally(() => setLoading(false));
           return;
         } else {
+          // Token expired — try refresh
+          const refreshTk = localStorage.getItem('bk_refreshToken');
+          if (refreshTk) {
+            api.post('/auth/refresh', { refreshToken: refreshTk }).then((res: any) => {
+              if (res.data.success) {
+                const newToken = res.data.data.token;
+                localStorage.setItem('bk_token', newToken);
+                if (res.data.data.refreshToken) {
+                  localStorage.setItem('bk_refreshToken', res.data.data.refreshToken);
+                }
+                setToken(newToken);
+                return api.get('/auth/profile');
+              }
+              throw new Error('Refresh failed');
+            }).then((res: any) => {
+              if (res.data.success) setUser(res.data.data.user);
+            }).catch(() => {
+              localStorage.removeItem('bk_token');
+              localStorage.removeItem('bk_refreshToken');
+              setToken(null);
+            }).finally(() => setLoading(false));
+            return;
+          }
           localStorage.removeItem('bk_token');
+          localStorage.removeItem('bk_refreshToken');
           setToken(null);
         }
       } catch {
@@ -68,11 +93,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(response.data.data.user);
         setToken(response.data.data.token);
         localStorage.setItem('bk_token', response.data.data.token);
+        if (response.data.data.refreshToken) {
+          localStorage.setItem('bk_refreshToken', response.data.data.refreshToken);
+        }
         return true;
       }
       return false;
-    } catch {
-      return false;
+    } catch (err) {
+      // Re-throw so caller can see the actual error
+      throw err;
     } finally {
       setLoading(false);
     }
@@ -82,6 +111,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
     setToken(null);
     localStorage.removeItem('bk_token');
+    localStorage.removeItem('bk_refreshToken');
   };
 
   return (

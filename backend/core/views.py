@@ -137,6 +137,10 @@ def _bank_rule_dict(rule):
 
 def _recon_line_dict(line):
     jl = line.journal_line
+    je = jl.journal_entry
+    # Use line description if set, otherwise fall back to journal entry description
+    description = jl.description or je.description or ""
+    entry_date = je.date.isoformat() if je.date else None
     return {
         "id": str(line.id),
         "journal_line_id": str(jl.id),
@@ -145,9 +149,11 @@ def _recon_line_dict(line):
         "account_name": jl.account.name,
         "debit": str(jl.debit),
         "credit": str(jl.credit),
-        "description": jl.description,
-        "entry_number": jl.journal_entry.entry_number,
-        "entry_date": jl.journal_entry.date.isoformat() if jl.journal_entry.date else None,
+        "description": description,
+        "reference": je.reference or "",
+        "entry_number": je.entry_number,
+        "date": entry_date,
+        "entry_date": entry_date,
         "is_matched": line.is_matched,
         "matched_at": line.matched_at.isoformat() if line.matched_at else None,
     }
@@ -174,6 +180,10 @@ def _reconciliation_dict(recon, include_lines=True):
         d["lines"] = [_recon_line_dict(l) for l in lines]
         d["matched_count"] = sum(1 for l in lines if l.is_matched)
         d["unmatched_count"] = sum(1 for l in lines if not l.is_matched)
+    else:
+        # Always include counts even in list view
+        d["matched_count"] = recon.lines.filter(is_matched=True).count()
+        d["unmatched_count"] = recon.lines.filter(is_matched=False).count()
     return d
 
 
@@ -256,6 +266,9 @@ def _settings_dict(settings_obj):
         "fiscal_year_start_month": settings_obj.fiscal_year_start_month,
         "date_format": settings_obj.date_format,
         "logo": settings_obj.logo.url if settings_obj.logo else None,
+        "logo1": settings_obj.logo1,
+        "logo2": settings_obj.logo2,
+        "logo3": settings_obj.logo3,
     }
 
 
@@ -2124,6 +2137,7 @@ def settings_detail(request):
     for field in (
         "company_name", "address", "city", "country", "tax_id",
         "phone", "email", "currency", "fiscal_year_start_month", "date_format",
+        "logo1", "logo2", "logo3",
     ):
         if field in data:
             setattr(settings_obj, field, data[field])

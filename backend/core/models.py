@@ -356,6 +356,11 @@ class CompanySettings(models.Model):
     fiscal_year_start_month = models.IntegerField(default=1)
     date_format = models.CharField(max_length=20, default="DD-MM-YYYY")
     logo = models.FileField(upload_to="logos/", blank=True, null=True)
+    # Base64 data-URL logos stored in the DB (survive container redeploys, no
+    # media server needed). logo1 = site, logo2 = invoice, logo3 = reserved.
+    logo1 = models.TextField(blank=True, default="")
+    logo2 = models.TextField(blank=True, default="")
+    logo3 = models.TextField(blank=True, default="")
 
     class Meta:
         db_table = "company_settings"

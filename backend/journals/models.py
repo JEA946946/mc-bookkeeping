@@ -21,6 +21,7 @@ class JournalEntry(models.Model):
         ("bank", "Bank"),
         ("margin_recognition", "Margin Recognition"),
         ("tva_margin", "TVA on Margin"),
+        ("payroll", "Payroll"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

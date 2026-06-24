@@ -48,13 +48,17 @@ def _invoice_line_dict(line):
         "description": line.description,
         "quantity": str(line.quantity),
         "unit_price": str(line.unit_price),
+        "sales_price": str(line.sales_price),
         "tax_code_id": str(line.tax_code_id) if line.tax_code_id else None,
         "tax_code_code": line.tax_code.code if line.tax_code_id else None,
         "tax_code_rate": str(line.tax_code.rate) if line.tax_code_id else None,
-        "account_id": str(line.account_id),
+        "account_id": str(line.account_id) if line.account_id else None,
         "account_code": line.account.code if line.account_id else None,
         "account_name": line.account.name if line.account_id else None,
         "amount": str(line.amount),
+        "is_text": line.is_text,
+        "is_hidden": line.is_hidden,
+        "position": line.position,
     }
 
 
@@ -401,8 +405,12 @@ def invoices_list_create(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Validate line accounts exist
-    account_ids = [line.get("account_id") for line in lines_data]
+    # Validate line accounts exist (text lines have no account)
+    account_ids = [
+        line.get("account_id")
+        for line in lines_data
+        if not line.get("is_text") and line.get("account_id")
+    ]
     accounts = {str(a.id): a for a in Account.objects.filter(id__in=account_ids)}
     for aid in account_ids:
         if aid not in accounts:
@@ -449,10 +457,27 @@ def invoices_list_create(request):
         subtotal = Decimal("0")
         tax_amount = Decimal("0")
 
-        for line_data in lines_data:
+        for idx, line_data in enumerate(lines_data):
+            # Text-only line — no amount, account or tax; kept for layout
+            if line_data.get("is_text"):
+                InvoiceLine.objects.create(
+                    invoice=invoice,
+                    description=line_data.get("description", ""),
+                    quantity=Decimal(str(line_data.get("quantity") or 0)),
+                    unit_price=0,
+                    sales_price=0,
+                    tax_code_id=None,
+                    account_id=None,
+                    is_text=True,
+                    is_hidden=bool(line_data.get("is_hidden")),
+                    position=idx,
+                )
+                continue
+
             try:
                 quantity = Decimal(str(line_data.get("quantity", 1)))
                 unit_price = Decimal(str(line_data.get("unit_price", 0)))
+                sales_price = Decimal(str(line_data.get("sales_price", 0)))
             except (InvalidOperation, TypeError):
                 raise ValueError("Invalid quantity or unit_price")
 
@@ -477,8 +502,11 @@ def invoices_list_create(request):
                 description=line_data.get("description", ""),
                 quantity=quantity,
                 unit_price=unit_price,
+                sales_price=sales_price,
                 tax_code_id=tax_code_id,
-                account_id=line_data["account_id"],
+                account_id=line_data.get("account_id"),
+                is_hidden=bool(line_data.get("is_hidden")),
+                position=idx,
             )
 
         invoice.subtotal = subtotal
@@ -565,8 +593,12 @@ def invoices_detail(request, pk):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Validate accounts
-        account_ids = [line.get("account_id") for line in lines_data]
+        # Validate accounts (text lines have no account)
+        account_ids = [
+            line.get("account_id")
+            for line in lines_data
+            if not line.get("is_text") and line.get("account_id")
+        ]
         accounts = {str(a.id): a for a in Account.objects.filter(id__in=account_ids)}
         for aid in account_ids:
             if aid not in accounts:
@@ -581,10 +613,27 @@ def invoices_detail(request, pk):
             subtotal = Decimal("0")
             tax_amount = Decimal("0")
 
-            for line_data in lines_data:
+            for idx, line_data in enumerate(lines_data):
+                # Text-only line — no amount, account or tax; kept for layout
+                if line_data.get("is_text"):
+                    InvoiceLine.objects.create(
+                        invoice=invoice,
+                        description=line_data.get("description", ""),
+                        quantity=Decimal(str(line_data.get("quantity") or 0)),
+                        unit_price=0,
+                        sales_price=0,
+                        tax_code_id=None,
+                        account_id=None,
+                        is_text=True,
+                        is_hidden=bool(line_data.get("is_hidden")),
+                        position=idx,
+                    )
+                    continue
+
                 try:
                     quantity = Decimal(str(line_data.get("quantity", 1)))
                     unit_price = Decimal(str(line_data.get("unit_price", 0)))
+                    sales_price = Decimal(str(line_data.get("sales_price", 0)))
                 except (InvalidOperation, TypeError):
                     return Response(
                         {"success": False, "message": "Invalid quantity or unit_price"},
@@ -610,8 +659,11 @@ def invoices_detail(request, pk):
                     description=line_data.get("description", ""),
                     quantity=quantity,
                     unit_price=unit_price,
+                    sales_price=sales_price,
                     tax_code_id=tax_code_id,
-                    account_id=line_data["account_id"],
+                    account_id=line_data.get("account_id"),
+                    is_hidden=bool(line_data.get("is_hidden")),
+                    position=idx,
                 )
 
             invoice.subtotal = subtotal
@@ -690,9 +742,11 @@ def invoice_post(request, pk):
             description=f"Invoice {invoice.invoice_number} — {invoice.customer.name}",
         )
 
-        # CR: Revenue accounts — group by account
+        # CR: Revenue accounts — group by account (skip text lines, which have no account)
         account_totals = defaultdict(Decimal)
         for line in lines:
+            if line.is_text or not line.account_id:
+                continue
             account_totals[line.account_id] += line.amount
 
         for account_id, amount in account_totals.items():
@@ -1088,9 +1142,11 @@ def credit_note_apply(request, pk):
                 else:
                     ratio = Decimal("1")
 
-                # Group by account
+                # Group by account (skip text lines, which have no account)
                 acct_totals = defaultdict(Decimal)
                 for line in inv_lines:
+                    if line.is_text or not line.account_id:
+                        continue
                     acct_totals[line.account_id] += line.amount
 
                 remainder = cn.subtotal
