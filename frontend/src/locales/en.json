@@ -846,7 +846,9 @@
     "billCreated": "Bill created",
     "amountRequired": "Enter an amount",
     "accountRequired": "Select an account",
-    "supplierRequired": "Select a supplier"
+    "supplierRequired": "Select a supplier",
+    "billMatched": "Bill created and matched to the transaction",
+    "matched": "Matched"
   },
   "accountingRules": {
     "title": "Accounting Rules — Morocco",

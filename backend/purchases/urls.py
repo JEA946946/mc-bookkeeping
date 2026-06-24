@@ -19,6 +19,7 @@ urlpatterns = [
     path("bills/match-suggestions", views.bill_match_suggestions, name="bill-match-suggestions"),
     path("bills/auto-match", views.bill_auto_match, name="bill-auto-match"),
     path("bills/linked-transaction-ids", views.bill_linked_transaction_ids, name="bill-linked-transaction-ids"),
+    path("bills/from-transaction", views.bill_create_from_transaction, name="bill-create-from-transaction"),
     # Bills
     path("bills", views.bills_list_create, name="bills-list-create"),
     path("bills/<uuid:pk>", views.bills_detail, name="bills-detail"),

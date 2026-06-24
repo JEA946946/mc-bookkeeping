@@ -846,7 +846,9 @@
     "billCreated": "Facture créée",
     "amountRequired": "Saisissez un montant",
     "accountRequired": "Sélectionnez un compte",
-    "supplierRequired": "Sélectionnez un fournisseur"
+    "supplierRequired": "Sélectionnez un fournisseur",
+    "billMatched": "Facture créée et rapprochée à la transaction",
+    "matched": "Rapprochée"
   },
   "accountingRules": {
     "title": "Règles comptables — Maroc",

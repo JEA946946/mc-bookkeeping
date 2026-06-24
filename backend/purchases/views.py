@@ -2141,3 +2141,126 @@ def bill_record_payment(request, pk):
         "message": "Payment recorded",
         "data": {"bill": _bill_dict(bill, include_lines=False)},
     })
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bill_create_from_transaction(request):
+    """Create a bill from a bank transaction (journal entry line), approve it,
+    and link the transaction as its payment — the one-click 'turn this bank
+    transaction into a matched bill' flow.
+
+    Uses the same matching mechanism as manual reconciliation (BillPaymentLink
+    + paid_amount); no extra journal entry beyond the bill's own approval entry.
+    """
+    data = request.data
+    jel_id = data.get("journal_entry_line_id")
+    supplier_id = data.get("supplier_id")
+    account_id = data.get("account_id")
+    if not jel_id or not supplier_id or not account_id:
+        return Response(
+            {"success": False, "message": "journal_entry_line_id, supplier_id and account_id are required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        jel = JournalEntryLine.objects.select_related("journal_entry").get(id=jel_id)
+    except JournalEntryLine.DoesNotExist:
+        return Response({"success": False, "message": "Transaction not found"}, status=status.HTTP_404_NOT_FOUND)
+    try:
+        supplier = Supplier.objects.get(id=supplier_id)
+    except Supplier.DoesNotExist:
+        return Response({"success": False, "message": "Supplier not found"}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        account = Account.objects.get(id=account_id)
+    except Account.DoesNotExist:
+        return Response({"success": False, "message": "Account not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+    tax_code = None
+    if data.get("tax_code_id"):
+        from core.models import TaxCode
+        try:
+            tax_code = TaxCode.objects.get(id=data["tax_code_id"])
+        except TaxCode.DoesNotExist:
+            return Response({"success": False, "message": "Tax code not found"}, status=status.HTTP_400_BAD_REQUEST)
+
+    if BillPaymentLink.objects.filter(journal_entry_line=jel).exists():
+        return Response(
+            {"success": False, "message": "This transaction is already matched to a bill"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not Account.objects.filter(code="200000").exists():
+        return Response(
+            {"success": False, "message": "Accounts Payable account (200000) not found"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # The cash that actually moved on the bank line (credit = out, else debit).
+    txn_amount = jel.credit if (jel.credit and jel.credit > 0) else jel.debit
+    try:
+        unit_price = Decimal(str(data.get("amount") or txn_amount))
+    except (InvalidOperation, TypeError):
+        return Response({"success": False, "message": "Invalid amount"}, status=status.HTTP_400_BAD_REQUEST)
+
+    import datetime as _dt
+    je = jel.journal_entry
+    try:
+        bill_date = _dt.date.fromisoformat(str(data.get("date") or je.date).split("T")[0])
+    except (ValueError, TypeError):
+        bill_date = je.date
+    auto_quarter = (bill_date.month - 1) // 3 + 1
+    created_by = (
+        f"{request.user.first_name} {request.user.last_name}".strip() or request.user.username
+    )
+
+    with transaction.atomic():
+        bill = Bill.objects.create(
+            bill_number=_next_bill_number(),
+            supplier=supplier,
+            date=bill_date,
+            due_date=data.get("due_date") or bill_date,
+            status="draft",
+            currency=jel.currency or "MAD",
+            vat_quarter=int(data.get("vat_quarter", auto_quarter)),
+            vat_year=int(data.get("vat_year", bill_date.year)),
+            reference=data.get("reference") or je.reference or "",
+            notes=data.get("notes", ""),
+            created_by=created_by,
+        )
+        tax_amount = (unit_price * tax_code.rate / Decimal("100")) if tax_code else Decimal("0")
+        BillLine.objects.create(
+            bill=bill,
+            description=data.get("description") or je.description or "",
+            quantity=Decimal("1"),
+            unit_price=unit_price,
+            tax_code=tax_code,
+            account=account,
+        )
+        bill.subtotal = unit_price
+        bill.tax_amount = tax_amount
+        bill.total = unit_price + tax_amount
+        bill.save()
+
+        ok, err = _approve_bill(bill, created_by)
+        if not ok:
+            transaction.set_rollback(True)
+            return Response({"success": False, "message": err}, status=status.HTTP_400_BAD_REQUEST)
+        bill.refresh_from_db()
+
+        # Link the transaction as payment — same as manual reconciliation.
+        link_amount = txn_amount or unit_price
+        BillPaymentLink.objects.create(
+            bill=bill, journal_entry_line=jel, amount=link_amount, matched_by=created_by,
+        )
+        bill.paid_amount += link_amount
+        if bill.total > 0 and bill.paid_amount >= bill.total:
+            bill.status = "paid"
+        bill.save()
+
+    bill.refresh_from_db()
+    return Response({
+        "success": True,
+        "message": "Bill created and matched to the transaction",
+        "data": {"bill": _bill_dict(bill)},
+    }, status=status.HTTP_201_CREATED)

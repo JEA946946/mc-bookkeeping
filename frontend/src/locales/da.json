@@ -846,7 +846,9 @@
     "billCreated": "Regning oprettet",
     "amountRequired": "Indtast et beløb",
     "accountRequired": "Vælg en konto",
-    "supplierRequired": "Vælg en leverandør"
+    "supplierRequired": "Vælg en leverandør",
+    "billMatched": "Regning oprettet og matchet med transaktionen",
+    "matched": "Matchet"
   },
   "accountingRules": {
     "title": "Regnskabsregler — Marokko",

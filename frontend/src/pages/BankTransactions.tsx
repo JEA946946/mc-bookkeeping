@@ -4,7 +4,7 @@ import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, TextField, MenuItem, TablePagination,
   Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete,
-  ToggleButtonGroup, ToggleButton, InputAdornment, Snackbar, Alert, Tooltip,
+  ToggleButtonGroup, ToggleButton, InputAdornment, Snackbar, Alert, Tooltip, Chip,
 } from '@mui/material';
 import {
   Download as DownloadIcon, Search as SearchIcon,
@@ -70,6 +70,14 @@ const BankTransactions: React.FC = () => {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [taxCodes, setTaxCodes] = useState<TaxCode[]>([]);
 
+  // Transaction IDs already matched to a bill
+  const [linkedIds, setLinkedIds] = useState<Set<string>>(new Set());
+  const fetchLinkedIds = useCallback(() => {
+    api.get('/bills/linked-transaction-ids')
+      .then((r) => { if (r.data.success) setLinkedIds(new Set(r.data.data.linked_ids)); })
+      .catch(() => {});
+  }, []);
+
   // Create-from-transaction dialog
   const [createOpen, setCreateOpen] = useState(false);
   const [createMode, setCreateMode] = useState<'expense' | 'bill'>('expense');
@@ -112,7 +120,8 @@ const BankTransactions: React.FC = () => {
     api.get('/suppliers').then(r => { if (r.data.success) setSuppliers(r.data.data.suppliers); }).catch(() => {});
     api.get('/accounts?is_active=true').then(r => { if (r.data.success) setAccounts(r.data.data.accounts); }).catch(() => {});
     api.get('/tax-codes').then(r => { if (r.data.success) setTaxCodes(r.data.data.tax_codes); }).catch(() => {});
-  }, []);
+    fetchLinkedIds();
+  }, [fetchLinkedIds]);
 
   const handleApplyFilters = () => {
     setPage(0);
@@ -187,20 +196,19 @@ const BankTransactions: React.FC = () => {
         await api.post('/expenses', fd);
         setSnack(t('bankTransactions.expenseCreated'));
       } else {
-        await api.post('/bills', {
+        await api.post('/bills/from-transaction', {
+          journal_entry_line_id: sourceTxn?.id,
           supplier_id: form.supplier_id,
+          account_id: form.account_id,
+          tax_code_id: form.tax_code_id || '',
           date: form.date,
           due_date: form.due_date || form.date,
+          description: form.description || t('bankTransactions.title'),
+          amount: String(amount),
           reference: form.reference,
-          lines: [{
-            description: form.description || t('bankTransactions.title'),
-            quantity: '1',
-            unit_price: String(amount),
-            account_id: form.account_id,
-            tax_code_id: form.tax_code_id || '',
-          }],
         });
-        setSnack(t('bankTransactions.billCreated'));
+        setSnack(t('bankTransactions.billMatched'));
+        fetchLinkedIds();
       }
       setCreateOpen(false);
     } catch (err: any) {
@@ -335,12 +343,14 @@ const BankTransactions: React.FC = () => {
                 </TableCell>
               </TableRow>
             ) : (
-              transactions.map((txn) => (
+              transactions.map((txn) => {
+                const matched = linkedIds.has(txn.id);
+                return (
                 <TableRow
                   key={txn.id}
                   hover
-                  onClick={() => openCreate(txn)}
-                  sx={{ cursor: 'pointer' }}
+                  onClick={() => { if (!matched) openCreate(txn); }}
+                  sx={{ cursor: matched ? 'default' : 'pointer', ...(matched ? { bgcolor: '#f1f8e9' } : {}) }}
                 >
                   <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(txn.date)}</TableCell>
                   <TableCell>{txn.entry_number}</TableCell>
@@ -350,18 +360,23 @@ const BankTransactions: React.FC = () => {
                   <TableCell align="right">{fmt(txn.debit)}</TableCell>
                   <TableCell align="right">{fmt(txn.credit)}</TableCell>
                   <TableCell align="right">
-                    <Tooltip title={t('bankTransactions.createFromTxn')}>
-                      <Button
-                        size="small"
-                        startIcon={<AddIcon sx={{ fontSize: 16 }} />}
-                        onClick={(e) => { e.stopPropagation(); openCreate(txn); }}
-                      >
-                        {t('bankTransactions.create')}
-                      </Button>
-                    </Tooltip>
+                    {matched ? (
+                      <Chip size="small" color="success" variant="outlined" label={t('bankTransactions.matched')} sx={{ height: 22 }} />
+                    ) : (
+                      <Tooltip title={t('bankTransactions.createFromTxn')}>
+                        <Button
+                          size="small"
+                          startIcon={<AddIcon sx={{ fontSize: 16 }} />}
+                          onClick={(e) => { e.stopPropagation(); openCreate(txn); }}
+                        >
+                          {t('bankTransactions.create')}
+                        </Button>
+                      </Tooltip>
+                    )}
                   </TableCell>
                 </TableRow>
-              ))
+                );
+              })
             )}
           </TableBody>
         </Table>
