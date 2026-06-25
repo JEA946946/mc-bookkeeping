@@ -503,6 +503,10 @@
   "expenses": {
     "title": "Driftsudgifter",
     "newExpense": "Ny Udgift",
+    "splitLines": "Fordelingslinjer",
+    "addLine": "Tilføj linje",
+    "lineRequired": "Tilføj mindst én linje med konto og beløb",
+    "split": "Opdelt ({{count}})",
     "editExpense": "Rediger Udgift",
     "expenseNumber": "Udgift Nr",
     "vendor": "Leverandør",
@@ -848,7 +852,8 @@
     "accountRequired": "Vælg en konto",
     "supplierRequired": "Vælg en leverandør",
     "billMatched": "Regning oprettet og matchet med transaktionen",
-    "matched": "Matchet"
+    "matched": "Matchet",
+    "txnAmount": "Transaktionsbeløb"
   },
   "accountingRules": {
     "title": "Regnskabsregler — Marokko",

@@ -17,7 +17,7 @@ from rest_framework.response import Response
 
 from accounts.models import Account
 from journals.models import JournalEntry, JournalEntryLine
-from .models import Supplier, Bill, BillLine, BillPaymentLink, Expense
+from .models import Supplier, Bill, BillLine, BillPaymentLink, Expense, ExpenseLine
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
@@ -102,7 +102,22 @@ def _bill_dict(bill, include_lines=True):
     return d
 
 
+def _expense_line_dict(line):
+    return {
+        "id": str(line.id),
+        "description": line.description,
+        "account_id": str(line.account_id) if line.account_id else None,
+        "account_code": line.account.code if line.account else None,
+        "account_name": line.account.name if line.account else None,
+        "tax_code_id": str(line.tax_code_id) if line.tax_code_id else None,
+        "tax_code_name": line.tax_code.name if line.tax_code else None,
+        "tax_rate": str(line.tax_code.rate) if line.tax_code else None,
+        "amount": str(line.amount),
+    }
+
+
 def _expense_dict(expense):
+    lines = expense.lines.select_related("account", "tax_code").all()
     return {
         "id": str(expense.id),
         "date": expense.date.isoformat() if hasattr(expense.date, "isoformat") else str(expense.date),
@@ -113,9 +128,9 @@ def _expense_dict(expense):
         "tax_code_id": str(expense.tax_code_id) if expense.tax_code_id else None,
         "tax_code_name": expense.tax_code.name if expense.tax_code else None,
         "tax_rate": str(expense.tax_code.rate) if expense.tax_code else None,
-        "account_id": str(expense.account_id),
-        "account_code": expense.account.code,
-        "account_name": expense.account.name,
+        "account_id": str(expense.account_id) if expense.account_id else None,
+        "account_code": expense.account.code if expense.account else None,
+        "account_name": expense.account.name if expense.account else None,
         "payment_method": expense.payment_method,
         "reference": expense.reference,
         "receipt": expense.receipt.url if expense.receipt else None,
@@ -123,6 +138,8 @@ def _expense_dict(expense):
         "journal_entry_id": str(expense.journal_entry_id) if expense.journal_entry_id else None,
         "created_by": expense.created_by,
         "created_at": expense.created_at.isoformat() if expense.created_at else None,
+        "lines": [_expense_line_dict(l) for l in lines],
+        "is_split": len(lines) > 1,
     }
 
 
@@ -950,6 +967,57 @@ def bill_move_to_expenses(request, pk):
 
 # ─── Expenses CRUD ───────────────────────────────────────────────────────────
 
+def _parse_expense_lines(data):
+    """Read the optional split `lines` field (a JSON string in multipart, or a
+    list). Returns (lines_list_or_None, error_message_or_None)."""
+    raw = data.get("lines")
+    if not raw:
+        return None, None
+    if isinstance(raw, str):
+        import json
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return None, "Invalid lines payload"
+    if not isinstance(raw, list):
+        return None, "Invalid lines payload"
+    # Drop fully-empty rows
+    raw = [l for l in raw if l and (l.get("account_id") or l.get("amount"))]
+    return raw, None
+
+
+def _build_expense_allocation(lines_data):
+    """Validate split lines. Returns (allocations, total, error_message).
+
+    allocations: list of {account, tax_code, amount, description}.
+    """
+    from core.models import TaxCode
+    account_ids = [l.get("account_id") for l in lines_data]
+    if not account_ids or any(not a for a in account_ids):
+        return None, None, "Each split line needs an account"
+    accounts = {str(a.id): a for a in Account.objects.filter(id__in=account_ids)}
+    for aid in account_ids:
+        if aid not in accounts:
+            return None, None, f"Account {aid} not found"
+    tax_ids = [l.get("tax_code_id") for l in lines_data if l.get("tax_code_id")]
+    tax_codes = {str(tc.id): tc for tc in TaxCode.objects.filter(id__in=tax_ids)} if tax_ids else {}
+    allocs = []
+    total = Decimal("0")
+    for l in lines_data:
+        try:
+            amt = Decimal(str(l.get("amount", 0)))
+        except (InvalidOperation, TypeError):
+            return None, None, "Invalid line amount"
+        allocs.append({
+            "account": accounts[str(l["account_id"])],
+            "tax_code": tax_codes.get(str(l.get("tax_code_id"))) if l.get("tax_code_id") else None,
+            "amount": amt,
+            "description": l.get("description", ""),
+        })
+        total += amt
+    return allocs, total, None
+
+
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
@@ -977,30 +1045,17 @@ def expenses_list_create(request):
             "data": {"expenses": [_expense_dict(e) for e in qs]},
         })
 
-    # POST — create expense
+    # POST — create expense (supports split lines via `lines`)
     data = request.data
-    for field in ("date", "description", "amount", "account_id"):
-        if not data.get(field):
-            return Response(
-                {"success": False, "message": f"{field} is required"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-    try:
-        amount = Decimal(str(data["amount"]))
-    except (InvalidOperation, TypeError):
+    if not data.get("date") or not data.get("description"):
         return Response(
-            {"success": False, "message": "Invalid amount"},
+            {"success": False, "message": "date and description are required"},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    try:
-        account = Account.objects.get(id=data["account_id"])
-    except Account.DoesNotExist:
-        return Response(
-            {"success": False, "message": "Account not found"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    lines_data, lerr = _parse_expense_lines(data)
+    if lerr:
+        return Response({"success": False, "message": lerr}, status=status.HTTP_400_BAD_REQUEST)
 
     supplier = None
     if data.get("supplier_id"):
@@ -1012,6 +1067,59 @@ def expenses_list_create(request):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+    created_by = (
+        f"{request.user.first_name} {request.user.last_name}".strip()
+        or request.user.username
+    )
+
+    if lines_data:
+        allocs, total, aerr = _build_expense_allocation(lines_data)
+        if aerr:
+            return Response({"success": False, "message": aerr}, status=status.HTTP_400_BAD_REQUEST)
+        if not allocs:
+            return Response(
+                {"success": False, "message": "At least one line is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        with transaction.atomic():
+            expense = Expense.objects.create(
+                date=data["date"], supplier=supplier, description=data["description"],
+                amount=total, tax_code=allocs[0]["tax_code"], account=allocs[0]["account"],
+                payment_method=data.get("payment_method", "bank_transfer"),
+                reference=data.get("reference", ""), receipt=request.FILES.get("receipt"),
+                status="pending", created_by=created_by,
+            )
+            for a in allocs:
+                ExpenseLine.objects.create(
+                    expense=expense, description=a["description"], account=a["account"],
+                    tax_code=a["tax_code"], amount=a["amount"],
+                )
+        return Response({
+            "success": True, "message": "Expense created",
+            "data": {"expense": _expense_dict(expense)},
+        }, status=status.HTTP_201_CREATED)
+
+    # Legacy single-account expense
+    for field in ("amount", "account_id"):
+        if not data.get(field):
+            return Response(
+                {"success": False, "message": f"{field} is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    try:
+        amount = Decimal(str(data["amount"]))
+    except (InvalidOperation, TypeError):
+        return Response(
+            {"success": False, "message": "Invalid amount"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        account = Account.objects.get(id=data["account_id"])
+    except Account.DoesNotExist:
+        return Response(
+            {"success": False, "message": "Account not found"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     tax_code = None
     if data.get("tax_code_id"):
         from core.models import TaxCode
@@ -1034,10 +1142,7 @@ def expenses_list_create(request):
         reference=data.get("reference", ""),
         receipt=request.FILES.get("receipt"),
         status="pending",
-        created_by=(
-            f"{request.user.first_name} {request.user.last_name}".strip()
-            or request.user.username
-        ),
+        created_by=created_by,
     )
 
     return Response({
@@ -1133,7 +1238,32 @@ def expenses_detail(request, pk):
     if request.FILES.get("receipt"):
         expense.receipt = request.FILES["receipt"]
 
-    expense.save()
+    lines_data, lerr = _parse_expense_lines(data)
+    if lerr:
+        return Response({"success": False, "message": lerr}, status=status.HTTP_400_BAD_REQUEST)
+
+    if lines_data is not None:
+        allocs, total, aerr = _build_expense_allocation(lines_data)
+        if aerr:
+            return Response({"success": False, "message": aerr}, status=status.HTTP_400_BAD_REQUEST)
+        if not allocs:
+            return Response(
+                {"success": False, "message": "At least one line is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        with transaction.atomic():
+            expense.amount = total
+            expense.account = allocs[0]["account"]
+            expense.tax_code = allocs[0]["tax_code"]
+            expense.save()
+            expense.lines.all().delete()
+            for a in allocs:
+                ExpenseLine.objects.create(
+                    expense=expense, description=a["description"], account=a["account"],
+                    tax_code=a["tax_code"], amount=a["amount"],
+                )
+    else:
+        expense.save()
 
     # Refresh to get updated select_related fields
     expense = Expense.objects.select_related("supplier", "account", "tax_code").get(id=pk)
@@ -1211,33 +1341,54 @@ def expense_approve(request, pk):
             created_by=created_by,
         )
 
-        # DR: expense account
-        dr_amount = expense.amount
-        tax_amount = Decimal("0")
+        # DR: one line per expense account (split lines, or the single
+        # legacy account), grouped. Tax grouped by its own account.
+        exp_lines = list(expense.lines.select_related("account", "tax_code").all())
+        account_totals = {}
+        tax_by_account = {}
 
-        if expense.tax_code:
-            tax_amount = expense.amount * expense.tax_code.rate / Decimal("100")
+        def _add_tax(tax_code, base):
+            if not tax_code or not tax_code.account_id:
+                return
+            t = base * tax_code.rate / Decimal("100")
+            if t:
+                k = str(tax_code.account_id)
+                tax_by_account.setdefault(k, {"account": tax_code.account, "amount": Decimal("0")})
+                tax_by_account[k]["amount"] += t
 
-        JournalEntryLine.objects.create(
-            journal_entry=entry,
-            account=expense.account,
-            debit=dr_amount,
-            credit=Decimal("0"),
-            description=expense.description,
-        )
+        if exp_lines:
+            for ln in exp_lines:
+                k = str(ln.account_id)
+                account_totals.setdefault(k, {"account": ln.account, "amount": Decimal("0")})
+                account_totals[k]["amount"] += ln.amount
+                _add_tax(ln.tax_code, ln.amount)
+        else:
+            account_totals[str(expense.account_id)] = {"account": expense.account, "amount": expense.amount}
+            _add_tax(expense.tax_code, expense.amount)
 
-        # If there is tax, add a DR line for the tax account
-        if tax_amount > 0 and expense.tax_code:
+        base_amount = sum(i["amount"] for i in account_totals.values())
+        tax_amount = sum(i["amount"] for i in tax_by_account.values())
+
+        for info in account_totals.values():
             JournalEntryLine.objects.create(
                 journal_entry=entry,
-                account=expense.tax_code.account,
-                debit=tax_amount,
+                account=info["account"],
+                debit=info["amount"],
+                credit=Decimal("0"),
+                description=expense.description,
+            )
+
+        for info in tax_by_account.values():
+            JournalEntryLine.objects.create(
+                journal_entry=entry,
+                account=info["account"],
+                debit=info["amount"],
                 credit=Decimal("0"),
                 description=f"Tax on expense: {expense.description}",
             )
 
-        # CR: bank/cash account for total (amount + tax)
-        total_cr = dr_amount + tax_amount
+        # CR: bank/cash account for total (base + tax)
+        total_cr = base_amount + tax_amount
         JournalEntryLine.objects.create(
             journal_entry=entry,
             account=cr_account,
@@ -2157,9 +2308,12 @@ def bill_create_from_transaction(request):
     jel_id = data.get("journal_entry_line_id")
     supplier_id = data.get("supplier_id")
     account_id = data.get("account_id")
-    if not jel_id or not supplier_id or not account_id:
+    lines_data, lerr = _parse_expense_lines(data)
+    if lerr:
+        return Response({"success": False, "message": lerr}, status=status.HTTP_400_BAD_REQUEST)
+    if not jel_id or not supplier_id or (not account_id and not lines_data):
         return Response(
-            {"success": False, "message": "journal_entry_line_id, supplier_id and account_id are required"},
+            {"success": False, "message": "journal_entry_line_id, supplier_id and an account (or split lines) are required"},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -2171,10 +2325,12 @@ def bill_create_from_transaction(request):
         supplier = Supplier.objects.get(id=supplier_id)
     except Supplier.DoesNotExist:
         return Response({"success": False, "message": "Supplier not found"}, status=status.HTTP_400_BAD_REQUEST)
-    try:
-        account = Account.objects.get(id=account_id)
-    except Account.DoesNotExist:
-        return Response({"success": False, "message": "Account not found"}, status=status.HTTP_400_BAD_REQUEST)
+    account = None
+    if not lines_data:
+        try:
+            account = Account.objects.get(id=account_id)
+        except Account.DoesNotExist:
+            return Response({"success": False, "message": "Account not found"}, status=status.HTTP_400_BAD_REQUEST)
 
     tax_code = None
     if data.get("tax_code_id"):
@@ -2228,19 +2384,39 @@ def bill_create_from_transaction(request):
             notes=data.get("notes", ""),
             created_by=created_by,
         )
-        tax_amount = (unit_price * tax_code.rate / Decimal("100")) if tax_code else Decimal("0")
-        BillLine.objects.create(
-            bill=bill,
-            description=data.get("description") or je.description or "",
-            quantity=Decimal("1"),
-            unit_price=unit_price,
-            tax_code=tax_code,
-            account=account,
-        )
-        bill.subtotal = unit_price
-        bill.tax_amount = tax_amount
-        bill.total = unit_price + tax_amount
-        bill.save()
+        default_desc = data.get("description") or je.description or ""
+        if lines_data:
+            allocs, subtotal, aerr = _build_expense_allocation(lines_data)
+            if aerr:
+                transaction.set_rollback(True)
+                return Response({"success": False, "message": aerr}, status=status.HTTP_400_BAD_REQUEST)
+            tax_amount = Decimal("0")
+            for a in allocs:
+                if a["tax_code"]:
+                    tax_amount += a["amount"] * a["tax_code"].rate / Decimal("100")
+                BillLine.objects.create(
+                    bill=bill, description=a["description"] or default_desc,
+                    quantity=Decimal("1"), unit_price=a["amount"],
+                    tax_code=a["tax_code"], account=a["account"],
+                )
+            bill.subtotal = subtotal
+            bill.tax_amount = tax_amount
+            bill.total = subtotal + tax_amount
+            bill.save()
+        else:
+            tax_amount = (unit_price * tax_code.rate / Decimal("100")) if tax_code else Decimal("0")
+            BillLine.objects.create(
+                bill=bill,
+                description=default_desc,
+                quantity=Decimal("1"),
+                unit_price=unit_price,
+                tax_code=tax_code,
+                account=account,
+            )
+            bill.subtotal = unit_price
+            bill.tax_amount = tax_amount
+            bill.total = unit_price + tax_amount
+            bill.save()
 
         ok, err = _approve_bill(bill, created_by)
         if not ok:

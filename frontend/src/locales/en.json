@@ -503,6 +503,10 @@
   "expenses": {
     "title": "Expenses",
     "newExpense": "New Expense",
+    "splitLines": "Allocation lines",
+    "addLine": "Add line",
+    "lineRequired": "Add at least one line with an account and amount",
+    "split": "Split ({{count}})",
     "editExpense": "Edit Expense",
     "expenseNumber": "Expense No.",
     "vendor": "Vendor",
@@ -848,7 +852,8 @@
     "accountRequired": "Select an account",
     "supplierRequired": "Select a supplier",
     "billMatched": "Bill created and matched to the transaction",
-    "matched": "Matched"
+    "matched": "Matched",
+    "txnAmount": "Transaction amount"
   },
   "accountingRules": {
     "title": "Accounting Rules — Morocco",

@@ -199,3 +199,30 @@ class Expense(models.Model):
 
     def __str__(self):
         return f"{self.date} — {self.description} ({self.amount})"
+
+
+class ExpenseLine(models.Model):
+    """A single split-allocation line of an expense.
+
+    Optional: legacy single-account expenses have no lines and use the
+    denormalized account/amount/tax_code on the Expense header.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    expense = models.ForeignKey(Expense, on_delete=models.CASCADE, related_name="lines")
+    description = models.CharField(max_length=500, blank=True, default="")
+    account = models.ForeignKey(
+        Account, on_delete=models.PROTECT, related_name="expense_lines"
+    )
+    tax_code = models.ForeignKey(
+        "core.TaxCode",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="expense_lines",
+    )
+    amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "expense_lines"
+        ordering = ["id"]

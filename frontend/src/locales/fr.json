@@ -503,6 +503,10 @@
   "expenses": {
     "title": "Dépenses",
     "newExpense": "Nouvelle dépense",
+    "splitLines": "Lignes de répartition",
+    "addLine": "Ajouter une ligne",
+    "lineRequired": "Ajoutez au moins une ligne avec un compte et un montant",
+    "split": "Réparti ({{count}})",
     "editExpense": "Modifier la dépense",
     "expenseNumber": "N° de dépense",
     "vendor": "Fournisseur",
@@ -848,7 +852,8 @@
     "accountRequired": "Sélectionnez un compte",
     "supplierRequired": "Sélectionnez un fournisseur",
     "billMatched": "Facture créée et rapprochée à la transaction",
-    "matched": "Rapprochée"
+    "matched": "Rapprochée",
+    "txnAmount": "Montant de la transaction"
   },
   "accountingRules": {
     "title": "Règles comptables — Maroc",

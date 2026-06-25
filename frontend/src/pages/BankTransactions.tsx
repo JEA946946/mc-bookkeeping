@@ -4,12 +4,12 @@ import {
   Box, Typography, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, TextField, MenuItem, TablePagination,
   Dialog, DialogTitle, DialogContent, DialogActions, Autocomplete,
-  ToggleButtonGroup, ToggleButton, InputAdornment, Snackbar, Alert, Tooltip, Chip,
+  ToggleButtonGroup, ToggleButton, Snackbar, Alert, Tooltip, Chip, IconButton,
 } from '@mui/material';
 import {
   Download as DownloadIcon, Search as SearchIcon,
   ArrowUpward as ArrowUpIcon, ArrowDownward as ArrowDownIcon,
-  AddCircleOutline as AddIcon,
+  AddCircleOutline as AddIcon, RemoveCircleOutline as RemoveLineIcon,
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import api from '../services/api';
@@ -85,9 +85,11 @@ const BankTransactions: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [snack, setSnack] = useState<string>('');
   const [form, setForm] = useState({
-    date: '', due_date: '', amount: '', description: '', reference: '',
-    supplier_id: '', account_id: '', tax_code_id: '',
+    date: '', due_date: '', description: '', reference: '', supplier_id: '',
   });
+  const [txnLines, setTxnLines] = useState<{ description: string; account_id: string; amount: string; tax_code_id: string }[]>([
+    { description: '', account_id: '', amount: '', tax_code_id: '' },
+  ]);
 
   const fetchTransactions = useCallback(async (p: number) => {
     const params = new URLSearchParams();
@@ -157,55 +159,56 @@ const BankTransactions: React.FC = () => {
     setForm({
       date: txn.date,
       due_date: txn.date,
-      amount: amount ? String(amount) : '',
       description: txn.description || '',
       reference: txn.reference || '',
       supplier_id: '',
-      account_id: '',
-      tax_code_id: '',
     });
+    setTxnLines([{ description: txn.description || '', account_id: '', amount: amount ? String(amount) : '', tax_code_id: '' }]);
     setCreateOpen(true);
   };
 
   const handleSupplierChange = (s: Supplier | null) => {
-    setForm(prev => ({
-      ...prev,
-      supplier_id: s?.id || '',
-      // Auto-fill the account from the supplier default if none chosen yet
-      account_id: prev.account_id || s?.default_account_id || '',
-    }));
+    setForm(prev => ({ ...prev, supplier_id: s?.id || '' }));
+    if (s?.default_account_id) {
+      setTxnLines(prev => prev.map((l, i) => (i === 0 && !l.account_id ? { ...l, account_id: s.default_account_id! } : l)));
+    }
   };
 
+  const updateTxnLine = (index: number, field: string, value: string) => {
+    setTxnLines(prev => prev.map((l, i) => (i === index ? { ...l, [field]: value } : l)));
+  };
+  const addTxnLine = () => setTxnLines(prev => [...prev, { description: '', account_id: '', amount: '', tax_code_id: '' }]);
+  const removeTxnLine = (index: number) => setTxnLines(prev => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
+  const txnTotal = txnLines.reduce((sum, l) => sum + (parseFloat(l.amount || '0') || 0), 0);
+
   const handleCreate = async () => {
-    const amount = parseFloat(form.amount || '0');
-    if (!amount) { setSnack(t('bankTransactions.amountRequired')); return; }
-    if (!form.account_id) { setSnack(t('bankTransactions.accountRequired')); return; }
+    const validLines = txnLines.filter(l => l.account_id && l.amount);
+    if (validLines.length === 0) { setSnack(t('bankTransactions.accountRequired')); return; }
     if (createMode === 'bill' && !form.supplier_id) { setSnack(t('bankTransactions.supplierRequired')); return; }
+    const linesPayload = validLines.map(l => ({
+      description: l.description, account_id: l.account_id, amount: l.amount, tax_code_id: l.tax_code_id || '',
+    }));
     setSaving(true);
     try {
       if (createMode === 'expense') {
         const fd = new FormData();
         fd.append('date', form.date);
         fd.append('description', form.description || t('bankTransactions.title'));
-        fd.append('amount', String(amount));
-        fd.append('account_id', form.account_id);
-        if (form.supplier_id) fd.append('supplier_id', form.supplier_id);
-        if (form.tax_code_id) fd.append('tax_code_id', form.tax_code_id);
         fd.append('payment_method', 'bank_transfer');
+        if (form.supplier_id) fd.append('supplier_id', form.supplier_id);
         if (form.reference) fd.append('reference', form.reference);
+        fd.append('lines', JSON.stringify(linesPayload));
         await api.post('/expenses', fd);
         setSnack(t('bankTransactions.expenseCreated'));
       } else {
         await api.post('/bills/from-transaction', {
           journal_entry_line_id: sourceTxn?.id,
           supplier_id: form.supplier_id,
-          account_id: form.account_id,
-          tax_code_id: form.tax_code_id || '',
           date: form.date,
           due_date: form.due_date || form.date,
           description: form.description || t('bankTransactions.title'),
-          amount: String(amount),
           reference: form.reference,
+          lines: linesPayload,
         });
         setSnack(t('bankTransactions.billMatched'));
         fetchLinkedIds();
@@ -394,7 +397,7 @@ const BankTransactions: React.FC = () => {
       </TableContainer>
 
       {/* Create-from-transaction dialog */}
-      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>{t('bankTransactions.createFromTxn')}</DialogTitle>
         <DialogContent>
           {sourceTxn && (
@@ -417,34 +420,19 @@ const BankTransactions: React.FC = () => {
             <ToggleButton value="bill">{t('bankTransactions.bill')}</ToggleButton>
           </ToggleButtonGroup>
 
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <Box sx={{ display: 'flex', gap: 2 }}>
-              <TextField
-                label={t('common.date')} type="date" size="small" value={form.date}
-                onChange={(e) => setForm({ ...form, date: e.target.value })}
-                InputLabelProps={{ shrink: true }} sx={{ width: 170 }}
-              />
-              {createMode === 'bill' && (
-                <TextField
-                  label={t('bills.dueDate')} type="date" size="small" value={form.due_date}
-                  onChange={(e) => setForm({ ...form, due_date: e.target.value })}
-                  InputLabelProps={{ shrink: true }} sx={{ width: 170 }}
-                />
-              )}
-              <TextField
-                label={t('common.amount')} type="number" size="small" value={form.amount}
-                onChange={(e) => setForm({ ...form, amount: e.target.value })}
-                inputProps={{ min: 0, step: '0.01' }}
-                InputProps={{ endAdornment: <InputAdornment position="end">{sourceTxn?.currency}</InputAdornment> }}
-                sx={{ flex: 1 }}
-              />
-            </Box>
-
+          <Box sx={{ display: 'flex', gap: 2, mb: 2, flexWrap: 'wrap' }}>
             <TextField
-              label={t('common.description')} size="small" value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })} fullWidth
+              label={t('common.date')} type="date" size="small" value={form.date}
+              onChange={(e) => setForm({ ...form, date: e.target.value })}
+              InputLabelProps={{ shrink: true }} sx={{ width: 160 }}
             />
-
+            {createMode === 'bill' && (
+              <TextField
+                label={t('bills.dueDate')} type="date" size="small" value={form.due_date}
+                onChange={(e) => setForm({ ...form, due_date: e.target.value })}
+                InputLabelProps={{ shrink: true }} sx={{ width: 160 }}
+              />
+            )}
             <Autocomplete
               options={suppliers}
               getOptionLabel={(s) => `${s.code} — ${s.name}`}
@@ -455,35 +443,92 @@ const BankTransactions: React.FC = () => {
                 return (q ? opts.filter((s) => s.name.toLowerCase().includes(q) || s.code.toLowerCase().includes(q)) : opts).slice(0, 50);
               }}
               isOptionEqualToValue={(o, v) => o.id === v.id}
+              sx={{ minWidth: 240, flex: 1 }}
               renderInput={(p) => (
                 <TextField {...p} size="small"
                   label={t('bills.supplier') + (createMode === 'bill' ? ' *' : ` (${t('common.optional')})`)}
                 />
               )}
             />
+          </Box>
 
-            <Autocomplete
-              options={accounts}
-              getOptionLabel={acctLabel}
-              value={accounts.find((a) => a.id === form.account_id) || null}
-              onChange={(_, v) => setForm({ ...form, account_id: v?.id || '' })}
-              filterOptions={(opts, st) => {
-                const q = st.inputValue.toLowerCase();
-                return (q ? opts.filter((a) => a.name.toLowerCase().includes(q) || a.code.toLowerCase().includes(q)) : opts).slice(0, 50);
-              }}
-              isOptionEqualToValue={(o, v) => o.id === v.id}
-              renderInput={(p) => <TextField {...p} size="small" label={`${t('common.account')} *`} />}
-            />
+          <TextField
+            label={t('common.description')} size="small" value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })} fullWidth sx={{ mb: 2 }}
+          />
 
-            <TextField
-              select label={t('bills.taxCode')} size="small" value={form.tax_code_id}
-              onChange={(e) => setForm({ ...form, tax_code_id: e.target.value })} sx={{ width: 220 }}
-            >
-              <MenuItem value="">{t('common.none')}</MenuItem>
-              {taxCodes.map((tc) => (
-                <MenuItem key={tc.id} value={tc.id}>{tc.code} ({tc.rate}%)</MenuItem>
-              ))}
-            </TextField>
+          <TableContainer component={Paper} variant="outlined">
+            <Table size="small">
+              <TableHead>
+                <TableRow sx={{ bgcolor: '#f5f5f5' }}>
+                  <TableCell sx={{ fontWeight: 600, width: '28%' }}>{t('common.description')}</TableCell>
+                  <TableCell sx={{ fontWeight: 600, width: '32%' }}>{t('common.account')}</TableCell>
+                  <TableCell sx={{ fontWeight: 600, width: '18%' }}>{t('bills.taxCode')}</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600, width: 120 }}>{t('common.amount')}</TableCell>
+                  <TableCell sx={{ width: 40 }} />
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {txnLines.map((line, i) => (
+                  <TableRow key={i}>
+                    <TableCell sx={{ p: 0.5 }}>
+                      <TextField value={line.description} size="small" fullWidth placeholder={t('common.description')}
+                        onChange={(e) => updateTxnLine(i, 'description', e.target.value)} />
+                    </TableCell>
+                    <TableCell sx={{ p: 0.5 }}>
+                      <Autocomplete
+                        size="small" fullWidth options={accounts}
+                        value={accounts.find((a) => a.id === line.account_id) || null}
+                        onChange={(_e, v) => updateTxnLine(i, 'account_id', v?.id || '')}
+                        getOptionLabel={acctLabel}
+                        filterOptions={(opts, st) => {
+                          const q = st.inputValue.toLowerCase();
+                          return (q ? opts.filter((a) => a.name.toLowerCase().includes(q) || a.code.toLowerCase().includes(q)) : opts).slice(0, 50);
+                        }}
+                        isOptionEqualToValue={(o, v) => o.id === v.id}
+                        renderInput={(p) => <TextField {...p} placeholder="—" />}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ p: 0.5 }}>
+                      <TextField select value={line.tax_code_id} size="small" fullWidth
+                        onChange={(e) => updateTxnLine(i, 'tax_code_id', e.target.value)}>
+                        <MenuItem value="">{t('common.none')}</MenuItem>
+                        {taxCodes.map((tc) => (
+                          <MenuItem key={tc.id} value={tc.id}>{tc.code} ({tc.rate}%)</MenuItem>
+                        ))}
+                      </TextField>
+                    </TableCell>
+                    <TableCell sx={{ p: 0.5 }}>
+                      <TextField value={line.amount} size="small" type="number" sx={{ width: 110 }}
+                        onChange={(e) => updateTxnLine(i, 'amount', e.target.value)}
+                        inputProps={{ min: 0, step: '0.01', style: { textAlign: 'right' } }} />
+                    </TableCell>
+                    <TableCell sx={{ p: 0.5 }}>
+                      <IconButton size="small" onClick={() => removeTxnLine(i)} disabled={txnLines.length <= 1}>
+                        <RemoveLineIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                <TableRow sx={{ bgcolor: '#e8f5e9' }}>
+                  <TableCell colSpan={3} align="right" sx={{ fontWeight: 700 }}>{t('common.total')}:</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    {txnTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })} {sourceTxn?.currency}
+                  </TableCell>
+                  <TableCell />
+                </TableRow>
+              </TableBody>
+            </Table>
+          </TableContainer>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 1 }}>
+            <Button startIcon={<AddIcon sx={{ fontSize: 18 }} />} onClick={addTxnLine} size="small">
+              {t('expenses.addLine')}
+            </Button>
+            {sourceTxn && (
+              <Typography variant="caption" color={txnTotal.toFixed(2) === (parseFloat(sourceTxn.credit || '0') || parseFloat(sourceTxn.debit || '0')).toFixed(2) ? 'text.secondary' : 'warning.main'}>
+                {t('bankTransactions.txnAmount')}: {(parseFloat(sourceTxn.credit || '0') || parseFloat(sourceTxn.debit || '0')).toLocaleString(undefined, { minimumFractionDigits: 2 })} {sourceTxn.currency}
+              </Typography>
+            )}
           </Box>
         </DialogContent>
         <DialogActions>

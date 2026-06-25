@@ -10,6 +10,7 @@ import {
   Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon,
   RemoveRedEye as ViewIcon, CheckCircle as ApproveIcon,
   Search as SearchIcon, CloudUpload as UploadIcon,
+  AddCircleOutline as AddLineIcon, RemoveCircleOutline as RemoveLineIcon,
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import api from '../services/api';
@@ -33,6 +34,14 @@ interface TaxCode {
   rate: string;
 }
 
+interface ExpenseLine {
+  id?: string;
+  description: string;
+  account_id: string;
+  amount: string;
+  tax_code_id: string;
+}
+
 interface Expense {
   id: string;
   date: string;
@@ -49,15 +58,16 @@ interface Expense {
   reference: string;
   receipt_filename: string | null;
   status: 'pending' | 'approved' | 'paid';
+  lines?: ExpenseLine[];
+  is_split?: boolean;
 }
+
+const EMPTY_LINE: ExpenseLine = { description: '', account_id: '', amount: '', tax_code_id: '' };
 
 const EMPTY_FORM = {
   date: new Date().toISOString().split('T')[0],
   description: '',
   supplier_id: '',
-  amount: '',
-  account_id: '',
-  tax_code_id: '',
   payment_method: 'bank_transfer',
   reference: '',
 };
@@ -109,8 +119,9 @@ const Expenses: React.FC = () => {
   const [rowsPerPage, setRowsPerPage] = useState(50);
   const [totalCount, setTotalCount] = useState(0);
 
-  // Form state
+  // Form state — header + split lines
   const [form, setForm] = useState({ ...EMPTY_FORM });
+  const [lines, setLines] = useState<ExpenseLine[]>([{ ...EMPTY_LINE }]);
 
   const fetchExpenses = (p?: number) => {
     const params = new URLSearchParams();
@@ -166,7 +177,7 @@ const Expenses: React.FC = () => {
     if (expense) {
       const res = await api.get(`/expenses/${expense.id}`);
       if (res.data.success) {
-        const full = res.data.data.expense;
+        const full: Expense = res.data.data.expense;
         setEditing(full);
         let supplierId = full.supplier_id || '';
         if (!supplierId && full.account_id) {
@@ -177,16 +188,28 @@ const Expenses: React.FC = () => {
           date: full.date,
           description: full.description,
           supplier_id: supplierId,
-          amount: full.amount,
-          account_id: full.account_id,
-          tax_code_id: full.tax_code_id || '',
           payment_method: full.payment_method || 'bank_transfer',
           reference: full.reference || '',
         });
+        const fullLines = full.lines && full.lines.length > 0
+          ? full.lines.map(l => ({
+              description: l.description || '',
+              account_id: l.account_id || '',
+              amount: l.amount,
+              tax_code_id: l.tax_code_id || '',
+            }))
+          : [{
+              description: '',
+              account_id: full.account_id || '',
+              amount: full.amount,
+              tax_code_id: full.tax_code_id || '',
+            }];
+        setLines(fullLines);
       }
     } else {
       setEditing(null);
       setForm({ ...EMPTY_FORM });
+      setLines([{ ...EMPTY_LINE }]);
     }
     setDialogOpen(true);
   };
@@ -199,18 +222,38 @@ const Expenses: React.FC = () => {
     }
   };
 
+  const updateLine = (index: number, field: keyof ExpenseLine, value: string) => {
+    setLines(prev => prev.map((l, i) => (i === index ? { ...l, [field]: value } : l)));
+    if (field === 'account_id' && value && !form.supplier_id) {
+      const matched = suppliers.find(s => s.default_account_id === value);
+      if (matched) setForm(prev => ({ ...prev, supplier_id: matched.id }));
+    }
+  };
+  const addLine = () => setLines(prev => [...prev, { ...EMPTY_LINE }]);
+  const removeLine = (index: number) => setLines(prev => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
+
+  const total = lines.reduce((sum, l) => sum + (parseFloat(l.amount || '0') || 0), 0);
+
   const handleSave = async () => {
     setError('');
+    const validLines = lines.filter(l => l.account_id && l.amount);
+    if (validLines.length === 0) {
+      setError(t('expenses.lineRequired'));
+      return;
+    }
     try {
       const formData = new FormData();
       formData.append('date', form.date);
       formData.append('description', form.description);
-      formData.append('amount', form.amount);
-      formData.append('account_id', form.account_id);
       formData.append('payment_method', form.payment_method);
       if (form.supplier_id) formData.append('supplier_id', form.supplier_id);
-      if (form.tax_code_id) formData.append('tax_code_id', form.tax_code_id);
       if (form.reference) formData.append('reference', form.reference);
+      formData.append('lines', JSON.stringify(validLines.map(l => ({
+        description: l.description,
+        account_id: l.account_id,
+        amount: l.amount,
+        tax_code_id: l.tax_code_id || '',
+      }))));
       if (receiptFile) formData.append('receipt', receiptFile);
 
       if (editing) {
@@ -263,8 +306,8 @@ const Expenses: React.FC = () => {
   };
 
   const selectedSupplier = suppliers.find(s => s.id === form.supplier_id) || null;
-  const selectedAccount = accounts.find(a => a.id === form.account_id) || null;
-  const selectedTaxCode = taxCodes.find(t => t.id === form.tax_code_id) || null;
+  const acctLabel = (a: Account) => `${a.code} — ${a.name}`;
+  const fmtNum = (v: number) => v.toLocaleString(i18n.language, { minimumFractionDigits: 2 });
 
   return (
     <Box>
@@ -334,9 +377,13 @@ const Expenses: React.FC = () => {
                   {parseFloat(exp.amount).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}
                 </TableCell>
                 <TableCell>
-                  <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
-                    {exp.account_code} {exp.account_name}
-                  </Typography>
+                  {exp.is_split ? (
+                    <Chip label={t('expenses.split', { count: exp.lines?.length || 0 })} size="small" color="info" variant="outlined" sx={{ height: 20, fontSize: '11px' }} />
+                  ) : (
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                      {exp.account_code} {exp.account_name}
+                    </Typography>
+                  )}
                 </TableCell>
                 <TableCell>{PAYMENT_METHOD_LABELS[exp.payment_method] || exp.payment_method}</TableCell>
                 <TableCell>{getStatusChip(exp.status)}</TableCell>
@@ -389,118 +436,140 @@ const Expenses: React.FC = () => {
       </TableContainer>
 
       {/* Create/Edit Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>{editing ? t('expenses.editExpense') : t('expenses.newExpense')}</DialogTitle>
         <DialogContent>
           {error && <Alert severity="error" sx={{ mb: 2, mt: 1 }}>{error}</Alert>}
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+          <Box sx={{ display: 'flex', gap: 2, mt: 1, mb: 2, flexWrap: 'wrap' }}>
             <TextField
               label={`${t('common.date')} *`} type="date" value={form.date} size="small"
               onChange={e => setForm(prev => ({ ...prev, date: e.target.value }))}
-              InputLabelProps={{ shrink: true }}
+              InputLabelProps={{ shrink: true }} sx={{ width: 170 }}
             />
             <Autocomplete
               size="small"
+              sx={{ minWidth: 220, flex: 1 }}
               options={suppliers}
               value={selectedSupplier}
               onChange={(_, val) => {
-                setForm(prev => {
-                  const updated = { ...prev, supplier_id: val?.id || '' };
-                  if (val?.default_account_id && !prev.account_id) {
-                    updated.account_id = val.default_account_id;
-                  }
-                  return updated;
-                });
+                setForm(prev => ({ ...prev, supplier_id: val?.id || '' }));
+                if (val?.default_account_id) {
+                  setLines(prev => prev.map(l => (l.account_id ? l : { ...l, account_id: val.default_account_id! })));
+                }
               }}
               getOptionLabel={(o) => o.name}
               isOptionEqualToValue={(o, v) => o.id === v.id}
               renderInput={(params) => <TextField {...params} label={t('expenses.supplierOptional')} />}
             />
             <TextField
-              label={`${t('common.description')} *`} value={form.description} size="small" fullWidth
-              onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))}
-            />
-            <TextField
-              label={`${t('common.amount')} *`} type="number" value={form.amount} size="small" fullWidth
-              onChange={e => setForm(prev => ({ ...prev, amount: e.target.value }))}
-              inputProps={{ min: 0, step: '0.01' }}
-            />
-            <Autocomplete
-              size="small"
-              options={accounts}
-              value={selectedAccount}
-              onChange={(_, val) => {
-                setForm(prev => {
-                  const updated = { ...prev, account_id: val?.id || '' };
-                  if (val?.id && !prev.supplier_id) {
-                    const matched = suppliers.find(s => s.default_account_id === val.id);
-                    if (matched) updated.supplier_id = matched.id;
-                  }
-                  return updated;
-                });
-              }}
-              getOptionLabel={(o) => `${o.code} — ${o.name}`}
-              isOptionEqualToValue={(o, v) => o.id === v.id}
-              renderInput={(params) => <TextField {...params} label={`${t('common.account')} *`} />}
-              renderOption={(props, option) => (
-                <li {...props} key={option.id}>
-                  <Typography variant="body2" component="span" sx={{ fontFamily: 'monospace', mr: 1 }}>
-                    {option.code}
-                  </Typography>
-                  {option.name}
-                </li>
-              )}
-              filterOptions={(options, { inputValue }) => {
-                if (!inputValue) return options.slice(0, 50);
-                const q = inputValue.toLowerCase();
-                return options.filter(o =>
-                  o.code.toLowerCase().includes(q) || o.name.toLowerCase().includes(q)
-                ).slice(0, 50);
-              }}
-            />
-            <Autocomplete
-              size="small"
-              options={taxCodes}
-              value={selectedTaxCode}
-              onChange={(_, val) => setForm(prev => ({ ...prev, tax_code_id: val?.id || '' }))}
-              getOptionLabel={(o) => `${o.code} — ${o.name} (${o.rate}%)`}
-              isOptionEqualToValue={(o, v) => o.id === v.id}
-              renderInput={(params) => <TextField {...params} label={t('expenses.taxCodeOptional')} />}
-            />
-            <TextField
               select label={`${t('expenses.paymentMethod')} *`} value={form.payment_method} size="small"
               onChange={e => setForm(prev => ({ ...prev, payment_method: e.target.value }))}
+              sx={{ width: 160 }}
             >
               {PAYMENT_METHODS.map(m => (
                 <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>
               ))}
             </TextField>
-            <TextField
-              label={t('common.reference')} value={form.reference} size="small" fullWidth
-              onChange={e => setForm(prev => ({ ...prev, reference: e.target.value }))}
-            />
-            <Box>
-              <Button
-                variant="outlined"
-                component="label"
-                startIcon={<UploadIcon />}
-                size="small"
-              >
-                {receiptFile?.name || (editing?.receipt_filename ? `${t('expenses.currentReceipt')} ${editing.receipt_filename}` : t('expenses.uploadReceipt'))}
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  hidden
-                  onChange={e => setReceiptFile(e.target.files?.[0] || null)}
-                />
+          </Box>
+          <TextField
+            label={`${t('common.description')} *`} value={form.description} size="small" fullWidth sx={{ mb: 2 }}
+            onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))}
+          />
+
+          {/* Split lines */}
+          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>{t('expenses.splitLines')}</Typography>
+          <TableContainer component={Paper} variant="outlined">
+            <Table size="small">
+              <TableHead>
+                <TableRow sx={{ bgcolor: '#f5f5f5' }}>
+                  <TableCell sx={{ fontWeight: 600, width: '28%' }}>{t('common.description')}</TableCell>
+                  <TableCell sx={{ fontWeight: 600, width: '32%' }}>{t('common.account')}</TableCell>
+                  <TableCell sx={{ fontWeight: 600, width: '18%' }}>{t('expenses.taxCode')}</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600, width: 120 }}>{t('common.amount')}</TableCell>
+                  <TableCell sx={{ width: 40 }} />
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {lines.map((line, i) => (
+                  <TableRow key={i}>
+                    <TableCell sx={{ p: 0.5 }}>
+                      <TextField
+                        value={line.description} size="small" fullWidth placeholder={t('common.description')}
+                        onChange={e => updateLine(i, 'description', e.target.value)}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ p: 0.5 }}>
+                      <Autocomplete
+                        size="small" fullWidth options={accounts}
+                        value={accounts.find(a => a.id === line.account_id) || null}
+                        onChange={(_e, val) => updateLine(i, 'account_id', val?.id || '')}
+                        getOptionLabel={acctLabel}
+                        filterOptions={(opts, st) => {
+                          const q = st.inputValue.toLowerCase();
+                          return (q ? opts.filter(a => a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q)) : opts).slice(0, 50);
+                        }}
+                        renderOption={(props, a) => (
+                          <li {...props} key={a.id}>
+                            <Typography variant="body2" component="span" sx={{ fontFamily: 'monospace', mr: 1 }}>{a.code}</Typography>
+                            {a.name}
+                          </li>
+                        )}
+                        renderInput={(params) => <TextField {...params} placeholder="—" />}
+                        isOptionEqualToValue={(o, v) => o.id === v.id}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ p: 0.5 }}>
+                      <TextField
+                        select value={line.tax_code_id} size="small" fullWidth
+                        onChange={e => updateLine(i, 'tax_code_id', e.target.value)}
+                      >
+                        <MenuItem value="">{t('common.none')}</MenuItem>
+                        {taxCodes.map(tc => (
+                          <MenuItem key={tc.id} value={tc.id}>{tc.code} ({tc.rate}%)</MenuItem>
+                        ))}
+                      </TextField>
+                    </TableCell>
+                    <TableCell sx={{ p: 0.5 }}>
+                      <TextField
+                        value={line.amount} size="small" type="number" sx={{ width: 110 }}
+                        onChange={e => updateLine(i, 'amount', e.target.value)}
+                        inputProps={{ min: 0, step: '0.01', style: { textAlign: 'right' } }}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ p: 0.5 }}>
+                      <IconButton size="small" onClick={() => removeLine(i)} disabled={lines.length <= 1}>
+                        <RemoveLineIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                <TableRow sx={{ bgcolor: '#e8f5e9' }}>
+                  <TableCell colSpan={3} align="right" sx={{ fontWeight: 700 }}>{t('common.total')}:</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>{fmtNum(total)}</TableCell>
+                  <TableCell />
+                </TableRow>
+              </TableBody>
+            </Table>
+          </TableContainer>
+          <Button startIcon={<AddLineIcon />} onClick={addLine} size="small" sx={{ mt: 1 }}>
+            {t('expenses.addLine')}
+          </Button>
+
+          <TextField
+            label={t('common.reference')} value={form.reference} size="small" fullWidth sx={{ mt: 2 }}
+            onChange={e => setForm(prev => ({ ...prev, reference: e.target.value }))}
+          />
+          <Box sx={{ mt: 2 }}>
+            <Button variant="outlined" component="label" startIcon={<UploadIcon />} size="small">
+              {receiptFile?.name || (editing?.receipt_filename ? `${t('expenses.currentReceipt')} ${editing.receipt_filename}` : t('expenses.uploadReceipt'))}
+              <input ref={fileRef} type="file" accept=".pdf,.jpg,.jpeg,.png" hidden
+                onChange={e => setReceiptFile(e.target.files?.[0] || null)} />
+            </Button>
+            {receiptFile && (
+              <Button size="small" sx={{ ml: 1 }} onClick={() => { setReceiptFile(null); if (fileRef.current) fileRef.current.value = ''; }}>
+                {t('expenses.removeReceipt')}
               </Button>
-              {receiptFile && (
-                <Button size="small" sx={{ ml: 1 }} onClick={() => { setReceiptFile(null); if (fileRef.current) fileRef.current.value = ''; }}>
-                  {t('expenses.removeReceipt')}
-                </Button>
-              )}
-            </Box>
+            )}
           </Box>
         </DialogContent>
         <DialogActions>
@@ -508,7 +577,7 @@ const Expenses: React.FC = () => {
           <Button
             variant="contained"
             onClick={handleSave}
-            disabled={!form.date || !form.description || !form.amount || !form.account_id}
+            disabled={!form.date || !form.description || total <= 0}
             sx={{ bgcolor: '#2e7d32' }}
           >
             {editing ? t('common.update') : t('common.save')}
@@ -517,7 +586,7 @@ const Expenses: React.FC = () => {
       </Dialog>
 
       {/* View Dialog */}
-      <Dialog open={viewDialogOpen} onClose={() => setViewDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={viewDialogOpen} onClose={() => setViewDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>
           {t('expenses.expense')}
           {viewing && (
@@ -538,37 +607,52 @@ const Expenses: React.FC = () => {
                   <Typography variant="caption" color="text.secondary">{t('expenses.paymentMethod')}</Typography>
                   <Typography variant="body2">{PAYMENT_METHOD_LABELS[viewing.payment_method] || viewing.payment_method}</Typography>
                 </Box>
+                {viewing.supplier_name && (
+                  <Box>
+                    <Typography variant="caption" color="text.secondary">{t('expenses.supplier')}</Typography>
+                    <Typography variant="body2">{viewing.supplier_name}</Typography>
+                  </Box>
+                )}
               </Box>
               <Box>
                 <Typography variant="caption" color="text.secondary">{t('common.description')}</Typography>
                 <Typography variant="body2">{viewing.description}</Typography>
               </Box>
-              {viewing.supplier_name && (
-                <Box>
-                  <Typography variant="caption" color="text.secondary">{t('expenses.supplier')}</Typography>
-                  <Typography variant="body2">{viewing.supplier_name}</Typography>
-                </Box>
-              )}
-              <Box sx={{ display: 'flex', gap: 4 }}>
-                <Box>
-                  <Typography variant="caption" color="text.secondary">{t('common.amount')}</Typography>
-                  <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                    {parseFloat(viewing.amount).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}
-                  </Typography>
-                </Box>
-                <Box>
-                  <Typography variant="caption" color="text.secondary">{t('common.account')}</Typography>
-                  <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                    {viewing.account_code} — {viewing.account_name}
-                  </Typography>
-                </Box>
-              </Box>
-              {viewing.tax_code_name && (
-                <Box>
-                  <Typography variant="caption" color="text.secondary">{t('expenses.taxCode')}</Typography>
-                  <Typography variant="body2">{viewing.tax_code_name}</Typography>
-                </Box>
-              )}
+              <TableContainer component={Paper} variant="outlined">
+                <Table size="small">
+                  <TableHead>
+                    <TableRow sx={{ bgcolor: '#f5f5f5' }}>
+                      <TableCell sx={{ fontWeight: 600 }}>{t('common.description')}</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>{t('common.account')}</TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>{t('expenses.taxCode')}</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 600 }}>{t('common.amount')}</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {(viewing.lines && viewing.lines.length > 0
+                      ? viewing.lines
+                      : [{ description: '', account_id: viewing.account_id, amount: viewing.amount, tax_code_id: viewing.tax_code_id || '' }]
+                    ).map((l, i) => {
+                      const acct = accounts.find(a => a.id === l.account_id);
+                      const tc = taxCodes.find(c => c.id === l.tax_code_id);
+                      return (
+                        <TableRow key={i}>
+                          <TableCell>{l.description || '—'}</TableCell>
+                          <TableCell>{acct ? `${acct.code} — ${acct.name}` : (viewing.account_code ? `${viewing.account_code} — ${viewing.account_name}` : '—')}</TableCell>
+                          <TableCell>{tc ? `${tc.code} (${tc.rate}%)` : '—'}</TableCell>
+                          <TableCell align="right">{parseFloat(l.amount).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    <TableRow sx={{ bgcolor: '#e8f5e9' }}>
+                      <TableCell colSpan={3} align="right" sx={{ fontWeight: 700 }}>{t('common.total')}:</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700 }}>
+                        {parseFloat(viewing.amount).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </TableContainer>
               {viewing.reference && (
                 <Box>
                   <Typography variant="caption" color="text.secondary">{t('common.reference')}</Typography>
