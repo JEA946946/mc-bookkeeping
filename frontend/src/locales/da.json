@@ -73,7 +73,7 @@
   "sidebar": {
     "overview": "OVERBLIK",
     "sales": "SALG",
-    "purchasing": "INDKØB",
+    "purchasing": "OMKOSTNINGER",
     "bank": "BANK",
     "bookkeeping": "BOGFØRING",
     "taxVat": "MOMS & SKAT",
@@ -84,8 +84,8 @@
     "invoices": "Fakturaer",
     "creditNotes": "Kreditnotaer",
     "suppliers": "Leverandører",
-    "bills": "Regninger",
-    "expenses": "Udgifter",
+    "bills": "Rejseomkostninger",
+    "expenses": "Driftsudgifter",
     "bankUpload": "Bank Upload",
     "payments": "Betalinger",
     "reconciliation": "Afstemning",
@@ -454,7 +454,7 @@
     "cmrBulkResult": "{{created}} leverandører oprettet, {{skipped}} sprunget over"
   },
   "bills": {
-    "title": "Regninger",
+    "title": "Rejseomkostninger",
     "newBill": "Ny Regning",
     "editBill": "Rediger {{number}}",
     "editApprovedNote": "Når du gemmer, sættes regningen tilbage til kladde, og dens kassekladde-postering fjernes — du skal godkende den igen for at bogføre den på ny. Eventuelle betalinger bevares.",
@@ -501,7 +501,7 @@
     "errorMoving": "Fejl ved flytning"
   },
   "expenses": {
-    "title": "Udgifter",
+    "title": "Driftsudgifter",
     "newExpense": "Ny Udgift",
     "editExpense": "Rediger Udgift",
     "expenseNumber": "Udgift Nr",
