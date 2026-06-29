@@ -17,7 +17,10 @@ from rest_framework.response import Response
 
 from accounts.models import Account
 from journals.models import JournalEntry, JournalEntryLine
-from .models import Supplier, Bill, BillLine, BillPaymentLink, Expense, ExpenseLine
+from .models import (
+    Supplier, Bill, BillLine, BillPaymentLink, Expense, ExpenseLine,
+    BankTransactionCategorization,
+)
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
@@ -2061,9 +2064,14 @@ def _score_bill_match(bill, amount, txn_date, description, reference):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def bill_linked_transaction_ids(request):
-    """Return all journal_entry_line IDs that have been linked to a bill."""
-    ids = list(
+    """Return all journal_entry_line IDs that are reconciled — either linked to a
+    bill (BillPaymentLink) or categorized directly to an account
+    (BankTransactionCategorization)."""
+    ids = set(
         BillPaymentLink.objects.values_list("journal_entry_line_id", flat=True)
+    )
+    ids |= set(
+        BankTransactionCategorization.objects.values_list("journal_entry_line_id", flat=True)
     )
     return Response({
         "success": True,
@@ -2439,4 +2447,144 @@ def bill_create_from_transaction(request):
         "success": True,
         "message": "Bill created and matched to the transaction",
         "data": {"bill": _bill_dict(bill)},
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bank_transaction_categorize(request, jel_id):
+    """Reconcile an outgoing bank transaction by booking it directly to one or
+    more expense/tax accounts — a reclassification out of Client Funds Liability
+    (240000) into the agency's own accounts.
+
+    Posts DR expense/tax accounts (+ VAT) / CR 240000 (reversing the import's
+    DR 240000), and records a BankTransactionCategorization so the transaction
+    reads as matched. The original CR Bank line is untouched.
+    """
+    data = request.data
+
+    lines_data, lerr = _parse_expense_lines(data)
+    if lerr:
+        return Response({"success": False, "message": lerr}, status=status.HTTP_400_BAD_REQUEST)
+    if not lines_data:
+        return Response(
+            {"success": False, "message": "At least one account line is required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        jel = JournalEntryLine.objects.select_related("journal_entry", "account").get(id=jel_id)
+    except JournalEntryLine.DoesNotExist:
+        return Response({"success": False, "message": "Transaction not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    if jel.journal_entry.source != "bank" or not (jel.account and jel.account.code.startswith("10")):
+        return Response(
+            {"success": False, "message": "Not a bank transaction line"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if (BillPaymentLink.objects.filter(journal_entry_line=jel).exists()
+            or BankTransactionCategorization.objects.filter(journal_entry_line=jel).exists()):
+        return Response(
+            {"success": False, "message": "This transaction is already matched"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Cash that moved on the bank line: credit = out, else debit.
+    txn_amount = jel.credit if (jel.credit and jel.credit > 0) else jel.debit
+    if not txn_amount or txn_amount <= 0:
+        return Response(
+            {"success": False, "message": "Transaction has no amount"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        client_funds_acct = Account.objects.get(code="240000")
+    except Account.DoesNotExist:
+        return Response(
+            {"success": False, "message": "Account 240000 (Client Funds Liability) not found"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    allocs, subtotal, aerr = _build_expense_allocation(lines_data)
+    if aerr:
+        return Response({"success": False, "message": aerr}, status=status.HTTP_400_BAD_REQUEST)
+
+    tax_total = Decimal("0")
+    tax_account = None
+    for a in allocs:
+        if a["tax_code"]:
+            tax_total += a["amount"] * a["tax_code"].rate / Decimal("100")
+            if not tax_account:
+                tax_account = a["tax_code"].account
+    posted_total = subtotal + tax_total
+
+    # The reclassification must fully clear the amount that left the bank.
+    if posted_total.quantize(Decimal("0.01")) != Decimal(str(txn_amount)).quantize(Decimal("0.01")):
+        return Response(
+            {"success": False, "message": "Line total must equal the transaction amount"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    import datetime as _dt
+    je = jel.journal_entry
+    try:
+        post_date = _dt.date.fromisoformat(str(data.get("date") or je.date).split("T")[0])
+    except (ValueError, TypeError):
+        post_date = je.date
+    created_by = (
+        f"{request.user.first_name} {request.user.last_name}".strip() or request.user.username
+    )
+    desc = data.get("description") or je.description or "Bank transaction"
+
+    with transaction.atomic():
+        entry = JournalEntry.objects.create(
+            entry_number=_next_je_entry_number(),
+            date=post_date,
+            description=f"Categorize: {desc}",
+            reference=data.get("reference") or je.reference or "",
+            source="reclass",
+            is_posted=True,
+            created_by=created_by,
+        )
+
+        # DR expense accounts (base), grouped by account.
+        account_totals = {}
+        for a in allocs:
+            acct = a["account"]
+            account_totals.setdefault(acct.id, {"account": acct, "amount": Decimal("0")})
+            account_totals[acct.id]["amount"] += a["amount"]
+        for info in account_totals.values():
+            JournalEntryLine.objects.create(
+                journal_entry=entry, account=info["account"],
+                debit=info["amount"], credit=Decimal("0"),
+                currency=jel.currency, description=desc,
+            )
+
+        # DR VAT
+        if tax_total > 0 and tax_account:
+            JournalEntryLine.objects.create(
+                journal_entry=entry, account=tax_account,
+                debit=tax_total, credit=Decimal("0"),
+                currency=jel.currency, description=f"VAT — {desc}",
+            )
+
+        # CR Client Funds Liability (240000) — reverses the import's debit.
+        JournalEntryLine.objects.create(
+            journal_entry=entry, account=client_funds_acct,
+            debit=Decimal("0"), credit=posted_total,
+            currency=jel.currency, description=desc,
+        )
+
+        BankTransactionCategorization.objects.create(
+            journal_entry_line=jel,
+            journal_entry=entry,
+            amount=posted_total,
+            categorized_by=created_by,
+        )
+
+    return Response({
+        "success": True,
+        "message": "Transaction categorized",
+        "data": {"journal_entry_id": str(entry.id)},
     }, status=status.HTTP_201_CREATED)

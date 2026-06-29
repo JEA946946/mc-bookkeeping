@@ -140,6 +140,34 @@ class BillPaymentLink(models.Model):
         return f"BillPaymentLink {self.bill_id} ↔ {self.journal_entry_line_id} ({self.amount})"
 
 
+class BankTransactionCategorization(models.Model):
+    """Reconciles a bank transaction (journal entry line) by booking it directly
+    to an expense/tax account — a reclassification out of Client Funds Liability
+    (240000) into the agency's own accounts. The `journal_entry` is the posted
+    reclassification entry (DR expense/tax, CR 240000)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    journal_entry_line = models.OneToOneField(
+        "journals.JournalEntryLine",
+        on_delete=models.CASCADE,
+        related_name="categorization",
+    )
+    journal_entry = models.ForeignKey(
+        "journals.JournalEntry",
+        on_delete=models.CASCADE,
+        related_name="transaction_categorizations",
+    )
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+    categorized_by = models.CharField(max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "bank_transaction_categorizations"
+
+    def __str__(self):
+        return f"Categorization {self.journal_entry_line_id} ({self.amount})"
+
+
 class Expense(models.Model):
     """Direct expense entry."""
 

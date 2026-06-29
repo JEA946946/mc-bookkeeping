@@ -19,6 +19,7 @@ import {
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import api from '../services/api';
+import CategorizeTransactionDialog from '../components/CategorizeTransactionDialog';
 
 interface Account {
   id: string;
@@ -112,6 +113,7 @@ const BankReconciliation: React.FC = () => {
   const [bmTransactions, setBmTransactions] = useState<BankTransaction[]>([]);
   const [bmSelectedTxn, setBmSelectedTxn] = useState<BankTransaction | null>(null);
   const [bmSuggestions, setBmSuggestions] = useState<BillSuggestion[]>([]);
+  const [catOpen, setCatOpen] = useState(false);
   const [bmLoading, setBmLoading] = useState(false);
   const [bmSugLoading, setBmSugLoading] = useState(false);
   const [bmMatchingId, setBmMatchingId] = useState<string | null>(null);
@@ -1145,13 +1147,26 @@ const BankReconciliation: React.FC = () => {
 
             {/* Right: Match suggestions */}
             <Box sx={{ flex: 1 }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-                <MatchIcon sx={{ fontSize: 18, color: '#2e7d32' }} />
-                {bmSelectedTxn
-                  ? `${t('billMatching.matchesFor')}: ${bmSelectedTxn.description.substring(0, 40)}…`
-                  : t('billMatching.title')
-                }
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1, gap: 1 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <MatchIcon sx={{ fontSize: 18, color: '#2e7d32' }} />
+                  {bmSelectedTxn
+                    ? `${t('billMatching.matchesFor')}: ${bmSelectedTxn.description.substring(0, 40)}…`
+                    : t('billMatching.title')
+                  }
+                </Typography>
+                {bmSelectedTxn && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<AccountBalanceIcon sx={{ fontSize: 16 }} />}
+                    onClick={() => setCatOpen(true)}
+                    sx={{ whiteSpace: 'nowrap' }}
+                  >
+                    {t('billMatching.bookToAccount')}
+                  </Button>
+                )}
+              </Box>
               {!bmSelectedTxn ? (
                 <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
                   <Typography variant="body2" color="text.secondary">
@@ -1244,6 +1259,20 @@ const BankReconciliation: React.FC = () => {
           <CircularProgress />
         </Box>
       )}
+
+      {/* Categorize (book to account) dialog */}
+      <CategorizeTransactionDialog
+        open={catOpen}
+        txn={bmSelectedTxn}
+        onClose={() => setCatOpen(false)}
+        onDone={() => {
+          if (bmSelectedTxn) setBmLinkedIds(prev => new Set(prev).add(bmSelectedTxn.id));
+          setCatOpen(false);
+          setBmSelectedTxn(null);
+          setBmSuggestions([]);
+          setSuccess(t('billMatching.categorized'));
+        }}
+      />
 
       {/* Create Dialog */}
       <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="sm" fullWidth>
