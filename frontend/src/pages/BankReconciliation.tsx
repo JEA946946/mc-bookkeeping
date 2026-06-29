@@ -16,12 +16,14 @@ import {
   TrendingUp as TrendingUpIcon,
   Receipt as ReceiptIcon,
   AssignmentTurnedIn as AssignmentIcon,
+  Edit as EditIcon,
 } from '@mui/icons-material';
 import { useTranslation } from 'react-i18next';
 import api from '../services/api';
 import CategorizeTransactionDialog from '../components/CategorizeTransactionDialog';
 import BulkCategorizeDialog from '../components/BulkCategorizeDialog';
 import ReconciliationDetailDialog from '../components/ReconciliationDetailDialog';
+import BillEditDialog from '../components/BillEditDialog';
 
 interface Account {
   id: string;
@@ -119,6 +121,7 @@ const BankReconciliation: React.FC = () => {
   const [bmSelectedIds, setBmSelectedIds] = useState<Set<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [detailTxn, setDetailTxn] = useState<BankTransaction | null>(null);
+  const [editBillId, setEditBillId] = useState<string | null>(null);
   const [bmLoading, setBmLoading] = useState(false);
   const [bmSugLoading, setBmSugLoading] = useState(false);
   const [bmMatchingId, setBmMatchingId] = useState<string | null>(null);
@@ -1268,16 +1271,23 @@ const BankReconciliation: React.FC = () => {
                             {parseFloat(bill.balance_due).toLocaleString(i18n.language, { minimumFractionDigits: 2 })}
                           </TableCell>
                           <TableCell align="center" sx={{ px: 0.5 }}>
-                            <Button
-                              size="small"
-                              variant="contained"
-                              disabled={bmMatchingId === bill.id}
-                              onClick={() => handleBmMatch(bill.id)}
-                              startIcon={bmMatchingId === bill.id ? <CircularProgress size={12} /> : <MatchIcon sx={{ fontSize: 14 }} />}
-                              sx={{ bgcolor: '#2e7d32', fontSize: '10px', py: 0.2, px: 1, minWidth: 'auto' }}
-                            >
-                              {t('billMatching.match')}
-                            </Button>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, justifyContent: 'center' }}>
+                              <Tooltip title={t('bills.editBill', { number: bill.bill_number })}>
+                                <IconButton size="small" onClick={() => setEditBillId(bill.id)} sx={{ p: 0.3 }}>
+                                  <EditIcon sx={{ fontSize: 15 }} />
+                                </IconButton>
+                              </Tooltip>
+                              <Button
+                                size="small"
+                                variant="contained"
+                                disabled={bmMatchingId === bill.id}
+                                onClick={() => handleBmMatch(bill.id)}
+                                startIcon={bmMatchingId === bill.id ? <CircularProgress size={12} /> : <MatchIcon sx={{ fontSize: 14 }} />}
+                                sx={{ bgcolor: '#2e7d32', fontSize: '10px', py: 0.2, px: 1, minWidth: 'auto' }}
+                              >
+                                {t('billMatching.match')}
+                              </Button>
+                            </Box>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -1317,6 +1327,18 @@ const BankReconciliation: React.FC = () => {
           setBmSelectedTxn(null);
           setBmSuggestions([]);
           setSuccess(t('billMatching.categorized'));
+        }}
+      />
+
+      {/* Edit a suggested bill's supplier / account */}
+      <BillEditDialog
+        open={!!editBillId}
+        billId={editBillId}
+        onClose={() => setEditBillId(null)}
+        onSaved={() => {
+          setEditBillId(null);
+          setSuccess(t('bills.billUpdated'));
+          if (bmSelectedTxn) fetchBmSuggestions(bmSelectedTxn);
         }}
       />
 

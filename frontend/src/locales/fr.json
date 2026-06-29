@@ -457,6 +457,8 @@
     "title": "Factures fournisseurs",
     "newBill": "Nouvelle facture fournisseur",
     "editBill": "Modifier {{number}}",
+    "editPostedNote": "Remarque : modifier une facture comptabilisée la repasse en brouillon ; elle devra être réapprouvée.",
+    "billUpdated": "Facture mise à jour",
     "editApprovedNote": "L'enregistrement remet cette facture en brouillon et supprime son écriture comptable — vous devrez l'approuver à nouveau pour la re-comptabiliser. Les paiements éventuels sont conservés.",
     "billNumber": "N° de facture",
     "supplier": "Fournisseur",

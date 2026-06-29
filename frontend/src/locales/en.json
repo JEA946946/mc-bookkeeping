@@ -457,6 +457,8 @@
     "title": "Bills",
     "newBill": "New Bill",
     "editBill": "Edit {{number}}",
+    "editPostedNote": "Note: editing a posted bill returns it to draft and it must be approved again.",
+    "billUpdated": "Bill updated",
     "editApprovedNote": "Saving will return this bill to draft and remove its journal entry — you'll need to approve it again to re-post it. Any payments are kept.",
     "billNumber": "Bill No.",
     "supplier": "Supplier",

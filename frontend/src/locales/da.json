@@ -457,6 +457,8 @@
     "title": "Rejseomkostninger",
     "newBill": "Ny Regning",
     "editBill": "Rediger {{number}}",
+    "editPostedNote": "Bemærk: redigering af en bogført regning trækker den tilbage til kladde og skal godkendes igen.",
+    "billUpdated": "Regning opdateret",
     "editApprovedNote": "Når du gemmer, sættes regningen tilbage til kladde, og dens kassekladde-postering fjernes — du skal godkende den igen for at bogføre den på ny. Eventuelle betalinger bevares.",
     "billNumber": "Regning Nr",
     "supplier": "Leverandør",
