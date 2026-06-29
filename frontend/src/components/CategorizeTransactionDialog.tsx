@@ -72,13 +72,15 @@ const CategorizeTransactionDialog: React.FC<Props> = ({ open, txn, onClose, onDo
   const addLine = () => setLines(prev => [...prev, { description: '', account_id: '', amount: '', tax_code_id: '' }]);
   const removeLine = (i: number) => setLines(prev => (prev.length <= 1 ? prev : prev.filter((_, idx) => idx !== i)));
 
-  // Total including VAT (mirrors backend: base + base*rate/100), so it matches
-  // the transaction amount the backend validates against.
-  const total = lines.reduce((sum, l) => {
-    const base = parseFloat(l.amount || '0') || 0;
+  // Bank payments are VAT-inclusive: the entered amount IS the gross amount.
+  // The total must equal the transaction amount; any selected tax code is
+  // split out of (not added to) that amount by the backend.
+  const total = lines.reduce((sum, l) => sum + (parseFloat(l.amount || '0') || 0), 0);
+  const vatIncluded = lines.reduce((sum, l) => {
+    const gross = parseFloat(l.amount || '0') || 0;
     const tc = taxCodes.find(c => c.id === l.tax_code_id);
     const rate = tc ? Number(tc.rate) : 0;
-    return sum + base + base * rate / 100;
+    return sum + (rate ? gross * rate / (100 + rate) : 0);
   }, 0);
 
   if (!txn) return null;
@@ -193,9 +195,16 @@ const CategorizeTransactionDialog: React.FC<Props> = ({ open, txn, onClose, onDo
           <Button startIcon={<AddIcon sx={{ fontSize: 18 }} />} onClick={addLine} size="small">
             {t('expenses.addLine')}
           </Button>
-          <Typography variant="caption" color={mismatch ? 'warning.main' : 'text.secondary'}>
-            {t('bankTransactions.txnAmount')}: {amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} {txn.currency}
-          </Typography>
+          <Box sx={{ textAlign: 'right' }}>
+            <Typography variant="caption" display="block" color={mismatch ? 'warning.main' : 'text.secondary'}>
+              {t('bankTransactions.txnAmount')}: {amount.toLocaleString(undefined, { minimumFractionDigits: 2 })} {txn.currency}
+            </Typography>
+            {vatIncluded > 0 && (
+              <Typography variant="caption" display="block" color="text.secondary">
+                {t('billMatching.vatIncluded')}: {vatIncluded.toLocaleString(undefined, { minimumFractionDigits: 2 })} {txn.currency}
+              </Typography>
+            )}
+          </Box>
         </Box>
       </DialogContent>
       <DialogActions>

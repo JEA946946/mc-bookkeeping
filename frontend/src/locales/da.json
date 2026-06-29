@@ -1050,6 +1050,7 @@
     "bookToAccount": "Bogfør på konto",
     "categorized": "Transaktion bogført og afstemt",
     "amountMismatch": "Linjernes total skal svare til transaktionens beløb",
+    "vatIncluded": "heraf moms",
     "bulkBook": "Bogfør valgte ({{count}})",
     "bulkBookTitle": "Bogfør {{count}} betalinger på konto",
     "bulkSummary": "{{count}} betalinger valgt",

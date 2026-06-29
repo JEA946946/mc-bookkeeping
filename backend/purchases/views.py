@@ -2510,14 +2510,25 @@ def bank_transaction_categorize(request, jel_id):
     if aerr:
         return Response({"success": False, "message": aerr}, status=status.HTTP_400_BAD_REQUEST)
 
-    tax_total = Decimal("0")
-    tax_account = None
+    # Bank payments are VAT-inclusive: the entered line amount IS the gross
+    # amount that left the bank. When a tax code is set, split it back into
+    # base (DR expense) + VAT (DR tax account); the gross still equals the
+    # amount cleared from 240000.
+    base_by_acct = {}
+    tax_by_acct = {}
     for a in allocs:
-        if a["tax_code"]:
-            tax_total += a["amount"] * a["tax_code"].rate / Decimal("100")
-            if not tax_account:
-                tax_account = a["tax_code"].account
-    posted_total = subtotal + tax_total
+        gross = a["amount"]
+        base = gross
+        tc = a["tax_code"]
+        if tc and tc.account and tc.rate:
+            base = (gross / (Decimal("1") + tc.rate / Decimal("100"))).quantize(Decimal("0.01"))
+            vat = gross - base
+            tax_by_acct.setdefault(tc.account.id, {"account": tc.account, "amount": Decimal("0")})
+            tax_by_acct[tc.account.id]["amount"] += vat
+        acct = a["account"]
+        base_by_acct.setdefault(acct.id, {"account": acct, "amount": Decimal("0")})
+        base_by_acct[acct.id]["amount"] += base
+    posted_total = subtotal  # gross total = sum of entered (inclusive) amounts
 
     # The reclassification must fully clear the amount that left the bank.
     if posted_total.quantize(Decimal("0.01")) != Decimal(str(txn_amount)).quantize(Decimal("0.01")):
@@ -2548,26 +2559,22 @@ def bank_transaction_categorize(request, jel_id):
             created_by=created_by,
         )
 
-        # DR expense accounts (base), grouped by account.
-        account_totals = {}
-        for a in allocs:
-            acct = a["account"]
-            account_totals.setdefault(acct.id, {"account": acct, "amount": Decimal("0")})
-            account_totals[acct.id]["amount"] += a["amount"]
-        for info in account_totals.values():
+        # DR expense accounts (base, net of VAT), grouped by account.
+        for info in base_by_acct.values():
             JournalEntryLine.objects.create(
                 journal_entry=entry, account=info["account"],
                 debit=info["amount"], credit=Decimal("0"),
                 currency=jel.currency, description=desc,
             )
 
-        # DR VAT
-        if tax_total > 0 and tax_account:
-            JournalEntryLine.objects.create(
-                journal_entry=entry, account=tax_account,
-                debit=tax_total, credit=Decimal("0"),
-                currency=jel.currency, description=f"VAT — {desc}",
-            )
+        # DR VAT, grouped by tax account.
+        for info in tax_by_acct.values():
+            if info["amount"] > 0:
+                JournalEntryLine.objects.create(
+                    journal_entry=entry, account=info["account"],
+                    debit=info["amount"], credit=Decimal("0"),
+                    currency=jel.currency, description=f"VAT — {desc}",
+                )
 
         # CR Client Funds Liability (240000) — reverses the import's debit.
         JournalEntryLine.objects.create(

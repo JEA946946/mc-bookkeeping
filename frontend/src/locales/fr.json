@@ -1050,6 +1050,7 @@
     "bookToAccount": "Comptabiliser sur un compte",
     "categorized": "Transaction comptabilisée et rapprochée",
     "amountMismatch": "Le total des lignes doit correspondre au montant de la transaction",
+    "vatIncluded": "dont TVA",
     "bulkBook": "Comptabiliser la sélection ({{count}})",
     "bulkBookTitle": "Comptabiliser {{count}} paiements sur un compte",
     "bulkSummary": "{{count}} paiements sélectionnés",

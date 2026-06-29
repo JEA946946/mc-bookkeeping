@@ -1050,6 +1050,7 @@
     "bookToAccount": "Book to account",
     "categorized": "Transaction booked and reconciled",
     "amountMismatch": "Line total must equal the transaction amount",
+    "vatIncluded": "incl. VAT",
     "bulkBook": "Book selected ({{count}})",
     "bulkBookTitle": "Book {{count}} payments to an account",
     "bulkSummary": "{{count}} payments selected",
