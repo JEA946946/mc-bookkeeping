@@ -21,6 +21,7 @@ urlpatterns = [
     path("bills/linked-transaction-ids", views.bill_linked_transaction_ids, name="bill-linked-transaction-ids"),
     path("bills/from-transaction", views.bill_create_from_transaction, name="bill-create-from-transaction"),
     path("transactions/<uuid:jel_id>/categorize", views.bank_transaction_categorize, name="bank-transaction-categorize"),
+    path("transactions/<uuid:jel_id>/reconciliation", views.bank_transaction_reconciliation, name="bank-transaction-reconciliation"),
     # Bills
     path("bills", views.bills_list_create, name="bills-list-create"),
     path("bills/<uuid:pk>", views.bills_detail, name="bills-detail"),

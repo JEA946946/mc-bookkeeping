@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import api from '../services/api';
 import CategorizeTransactionDialog from '../components/CategorizeTransactionDialog';
 import BulkCategorizeDialog from '../components/BulkCategorizeDialog';
+import ReconciliationDetailDialog from '../components/ReconciliationDetailDialog';
 
 interface Account {
   id: string;
@@ -117,6 +118,7 @@ const BankReconciliation: React.FC = () => {
   const [catOpen, setCatOpen] = useState(false);
   const [bmSelectedIds, setBmSelectedIds] = useState<Set<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [detailTxn, setDetailTxn] = useState<BankTransaction | null>(null);
   const [bmLoading, setBmLoading] = useState(false);
   const [bmSugLoading, setBmSugLoading] = useState(false);
   const [bmMatchingId, setBmMatchingId] = useState<string | null>(null);
@@ -1139,12 +1141,11 @@ const BankReconciliation: React.FC = () => {
                             hover={!isLinked}
                             selected={bmSelectedTxn?.id === txn.id}
                             sx={{
-                              cursor: isLinked ? 'default' : 'pointer',
+                              cursor: 'pointer',
                               bgcolor: isLinked ? '#e8f5e9' : undefined,
-                              opacity: isLinked ? 0.6 : 1,
-                              pointerEvents: isLinked ? 'none' : 'auto',
+                              opacity: isLinked ? 0.75 : 1,
                             }}
-                            onClick={() => { if (!isLinked) fetchBmSuggestions(txn); }}
+                            onClick={() => { if (isLinked) setDetailTxn(txn); else fetchBmSuggestions(txn); }}
                           >
                             <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
                               {!isLinked && (
@@ -1316,6 +1317,27 @@ const BankReconciliation: React.FC = () => {
           setBmSelectedTxn(null);
           setBmSuggestions([]);
           setSuccess(t('billMatching.categorized'));
+        }}
+      />
+
+      {/* Reconciliation detail (view / edit / remove) dialog */}
+      <ReconciliationDetailDialog
+        open={!!detailTxn}
+        txn={detailTxn}
+        onClose={() => setDetailTxn(null)}
+        onRemoved={(id) => {
+          setDetailTxn(null);
+          setBmLinkedIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+          setSuccess(t('billMatching.reconciliationRemoved'));
+        }}
+        onEdit={() => {
+          const tx = detailTxn;
+          setDetailTxn(null);
+          if (!tx) return;
+          setBmLinkedIds(prev => { const n = new Set(prev); n.delete(tx.id); return n; });
+          setBmSelectedTxn(tx);
+          setBmSuggestions([]);
+          setCatOpen(true);
         }}
       />
 

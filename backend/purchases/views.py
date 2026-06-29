@@ -2588,3 +2588,79 @@ def bank_transaction_categorize(request, jel_id):
         "message": "Transaction categorized",
         "data": {"journal_entry_id": str(entry.id)},
     }, status=status.HTTP_201_CREATED)
+
+
+@api_view(["GET", "DELETE"])
+@permission_classes([IsAuthenticated])
+def bank_transaction_reconciliation(request, jel_id):
+    """Inspect or undo how a bank transaction is reconciled.
+
+    GET  → what the transaction is linked to (a categorization or a bill).
+    DELETE → undo the reconciliation so the transaction can be redone:
+        - categorization: delete the reclassification journal entry + link.
+        - bill payment link: remove the link and roll the bill's paid amount
+          back (the bill itself is left in place).
+    """
+    try:
+        jel = JournalEntryLine.objects.select_related("journal_entry").get(id=jel_id)
+    except JournalEntryLine.DoesNotExist:
+        return Response({"success": False, "message": "Transaction not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    cat = BankTransactionCategorization.objects.filter(journal_entry_line=jel).select_related("journal_entry").first()
+    links = list(BillPaymentLink.objects.filter(journal_entry_line=jel).select_related("bill", "bill__supplier"))
+
+    if request.method == "GET":
+        if cat:
+            je = cat.journal_entry
+            lines = [
+                {
+                    "account_code": l.account.code,
+                    "account_name": l.account.name,
+                    "debit": str(l.debit),
+                    "credit": str(l.credit),
+                }
+                for l in je.lines.select_related("account").all()
+            ]
+            return Response({"success": True, "data": {
+                "type": "categorization",
+                "amount": str(cat.amount),
+                "categorized_by": cat.categorized_by,
+                "created_at": cat.created_at.isoformat() if cat.created_at else None,
+                "journal_entry": {
+                    "id": str(je.id),
+                    "entry_number": je.entry_number,
+                    "date": je.date.isoformat() if hasattr(je.date, "isoformat") else str(je.date),
+                    "lines": lines,
+                },
+            }})
+        if links:
+            link = links[0]
+            return Response({"success": True, "data": {
+                "type": "bill",
+                "amount": str(sum((lk.amount for lk in links), Decimal("0"))),
+                "bill": _bill_dict(link.bill, include_lines=False),
+            }})
+        return Response({"success": True, "data": {"type": None}})
+
+    # DELETE — undo
+    if cat:
+        with transaction.atomic():
+            je = cat.journal_entry
+            cat.delete()
+            je.delete()  # cascade removes its lines
+        return Response({"success": True, "message": "Categorization removed"})
+
+    if links:
+        with transaction.atomic():
+            for link in links:
+                bill = link.bill
+                bill.paid_amount = (bill.paid_amount or Decimal("0")) - link.amount
+                if bill.paid_amount < 0:
+                    bill.paid_amount = Decimal("0")
+                if bill.status == "paid" and bill.paid_amount < bill.total:
+                    bill.status = "approved"
+                bill.save()
+                link.delete()
+        return Response({"success": True, "message": "Payment link removed"})
+
+    return Response({"success": False, "message": "Transaction is not reconciled"}, status=status.HTTP_400_BAD_REQUEST)
