@@ -51,7 +51,12 @@ const CategorizeTransactionDialog: React.FC<Props> = ({ open, txn, onClose, onDo
 
   useEffect(() => {
     if (!open) return;
-    api.get('/accounts?is_active=true').then(r => { if (r.data.success) setAccounts(r.data.data.accounts); }).catch(() => {});
+    api.get('/accounts?is_active=true').then(r => {
+      if (r.data.success) {
+        const list: Account[] = [...r.data.data.accounts].sort((a, b) => a.code.localeCompare(b.code));
+        setAccounts(list);
+      }
+    }).catch(() => {});
     api.get('/tax-codes').then(r => { if (r.data.success) setTaxCodes(r.data.data.tax_codes); }).catch(() => {});
   }, [open]);
 
@@ -145,8 +150,9 @@ const CategorizeTransactionDialog: React.FC<Props> = ({ open, txn, onClose, onDo
                       getOptionLabel={acctLabel}
                       filterOptions={(opts, st) => {
                         const q = st.inputValue.toLowerCase();
-                        return (q ? opts.filter((a) => a.name.toLowerCase().includes(q) || a.code.toLowerCase().includes(q)) : opts).slice(0, 50);
+                        return q ? opts.filter((a) => a.name.toLowerCase().includes(q) || a.code.toLowerCase().includes(q)) : opts;
                       }}
+                      ListboxProps={{ style: { maxHeight: 320 } }}
                       isOptionEqualToValue={(o, v) => o.id === v.id}
                       renderInput={(p) => <TextField {...p} placeholder="—" />}
                     />
