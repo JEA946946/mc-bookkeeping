@@ -1044,6 +1044,7 @@
     "noMatches": "Ingen matchende regninger fundet",
     "paymentRecorded": "Betaling registreret",
     "errorMatching": "Fejl ved registrering af betaling",
+    "errorLoading": "Kunne ikke indlæse banktransaktioner. Prøv at opdatere.",
     "bankAccount": "Bankkonto",
     "autoMatch": "Auto-match",
     "autoMatching": "Matcher...",

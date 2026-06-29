@@ -286,45 +286,60 @@ const BankReconciliation: React.FC = () => {
   // Bill matching functions
   const fetchBmTransactions = useCallback(async () => {
     setBmLoading(true);
-    try {
-      const baseParams: Record<string, string> = { page_size: '200' };
-      if (bmFilterAccount) baseParams.bank_account_id = bmFilterAccount;
-      if (bmFilterDateFrom) baseParams.date_from = bmFilterDateFrom;
-      if (bmFilterDateTo) baseParams.date_to = bmFilterDateTo;
+    setError('');
+    // Ask the server for outgoing transactions only (credit on the bank line).
+    const baseParams: Record<string, string> = { page_size: '200', direction: 'out' };
+    if (bmFilterAccount) baseParams.bank_account_id = bmFilterAccount;
+    if (bmFilterDateFrom) baseParams.date_from = bmFilterDateFrom;
+    if (bmFilterDateTo) baseParams.date_to = bmFilterDateTo;
 
-      let allTxns: BankTransaction[] = [];
-      let page = 1;
-      let hasMore = true;
+    let allTxns: BankTransaction[] = [];
+    let page = 1;
+    let hasMore = true;
+    let loadError = false;
 
-      while (hasMore) {
-        const params = { ...baseParams, page: String(page) };
-        const query = new URLSearchParams(params).toString();
+    // Paginate, but commit whatever we manage to fetch even if a later page
+    // fails — never discard everything on a single failed request.
+    while (hasMore) {
+      const params = { ...baseParams, page: String(page) };
+      const query = new URLSearchParams(params).toString();
+      try {
         const res = await api.get(`/bank-transactions?${query}`);
         if (res.data.success) {
           const txns: BankTransaction[] = res.data.data.transactions || [];
           allTxns = allTxns.concat(txns);
           const totalCount = res.data.data.total_count || 0;
-          hasMore = allTxns.length < totalCount;
+          hasMore = allTxns.length < totalCount && txns.length > 0;
           page++;
         } else {
           hasMore = false;
+          loadError = true;
         }
+      } catch (err) {
+        console.error('Failed to load bank transactions for matching', err);
+        hasMore = false;
+        loadError = true;
       }
+    }
 
-      // Filter to outgoing transactions (credit > 0)
-      setBmTransactions(allTxns.filter(t => parseFloat(t.credit || '0') > 0));
+    // Belt-and-suspenders: keep only outgoing rows even if the server filter
+    // is unavailable (older backend).
+    setBmTransactions(allTxns.filter(t => parseFloat(t.credit || '0') > 0));
 
-      // Fetch already-linked transaction IDs
+    // Fetch already-linked transaction IDs
+    try {
       const linkedRes = await api.get('/bills/linked-transaction-ids');
       if (linkedRes.data.success) {
         setBmLinkedIds(new Set(linkedRes.data.data.linked_ids || []));
       }
-    } catch {
-      // silent
-    } finally {
-      setBmLoading(false);
+    } catch (err) {
+      console.error('Failed to load linked transaction ids', err);
+      loadError = true;
     }
-  }, [bmFilterAccount, bmFilterDateFrom, bmFilterDateTo]);
+
+    if (loadError) setError(t('billMatching.errorLoading'));
+    setBmLoading(false);
+  }, [bmFilterAccount, bmFilterDateFrom, bmFilterDateTo, t]);
 
   const fetchBmSuggestions = async (txn: BankTransaction) => {
     setBmSelectedTxn(txn);

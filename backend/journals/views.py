@@ -2335,6 +2335,13 @@ def _bank_txn_queryset(request):
 
     if request.query_params.get("bank_account_id"):
         qs = qs.filter(account_id=request.query_params["bank_account_id"])
+    # direction: "out" = money leaving the bank (credit on bank line),
+    # "in" = money received (debit on bank line). Absent = both.
+    direction = request.query_params.get("direction")
+    if direction == "out":
+        qs = qs.filter(credit__gt=0)
+    elif direction == "in":
+        qs = qs.filter(debit__gt=0)
     if request.query_params.get("date_from"):
         qs = qs.filter(journal_entry__date__gte=request.query_params["date_from"])
     if request.query_params.get("date_to"):

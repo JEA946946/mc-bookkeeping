@@ -1044,6 +1044,7 @@
     "noMatches": "Aucune facture correspondante trouvée",
     "paymentRecorded": "Paiement enregistré",
     "errorMatching": "Erreur lors de l'enregistrement du paiement",
+    "errorLoading": "Impossible de charger les transactions bancaires. Veuillez actualiser.",
     "bankAccount": "Compte bancaire",
     "autoMatch": "Auto-rapprochement",
     "autoMatching": "Rapprochement...",

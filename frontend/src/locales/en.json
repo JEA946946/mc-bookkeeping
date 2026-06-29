@@ -1044,6 +1044,7 @@
     "noMatches": "No matching bills found",
     "paymentRecorded": "Payment recorded",
     "errorMatching": "Error recording payment",
+    "errorLoading": "Could not load bank transactions. Try refreshing.",
     "bankAccount": "Bank Account",
     "autoMatch": "Auto Match",
     "autoMatching": "Matching...",
