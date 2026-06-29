@@ -20,6 +20,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import api from '../services/api';
 import CategorizeTransactionDialog from '../components/CategorizeTransactionDialog';
+import BulkCategorizeDialog from '../components/BulkCategorizeDialog';
 
 interface Account {
   id: string;
@@ -114,6 +115,8 @@ const BankReconciliation: React.FC = () => {
   const [bmSelectedTxn, setBmSelectedTxn] = useState<BankTransaction | null>(null);
   const [bmSuggestions, setBmSuggestions] = useState<BillSuggestion[]>([]);
   const [catOpen, setCatOpen] = useState(false);
+  const [bmSelectedIds, setBmSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [bmLoading, setBmLoading] = useState(false);
   const [bmSugLoading, setBmSugLoading] = useState(false);
   const [bmMatchingId, setBmMatchingId] = useState<string | null>(null);
@@ -1066,10 +1069,23 @@ const BankReconciliation: React.FC = () => {
           <Box sx={{ display: 'flex', gap: 2, flexDirection: { xs: 'column', md: 'row' } }}>
             {/* Left: Bank Transactions (Outgoing) */}
             <Box sx={{ flex: 1 }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 600, mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CompareIcon sx={{ fontSize: 18 }} />
-                {t('billMatching.bankTransactions')} ({bmTransactions.length})
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1, gap: 1, minHeight: 32 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <CompareIcon sx={{ fontSize: 18 }} />
+                  {t('billMatching.bankTransactions')} ({bmTransactions.length})
+                </Typography>
+                {bmSelectedIds.size > 0 && (
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<AccountBalanceIcon sx={{ fontSize: 16 }} />}
+                    onClick={() => setBulkOpen(true)}
+                    sx={{ bgcolor: '#2e7d32', whiteSpace: 'nowrap' }}
+                  >
+                    {t('billMatching.bulkBook', { count: bmSelectedIds.size })}
+                  </Button>
+                )}
+              </Box>
               {bmLoading ? (
                 <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
                   <CircularProgress size={24} />
@@ -1079,6 +1095,22 @@ const BankReconciliation: React.FC = () => {
                   <Table size="small" stickyHeader sx={{ '& td, & th': { fontSize: '11px', px: 1, py: 0.4 } }}>
                     <TableHead>
                       <TableRow sx={{ bgcolor: '#f5f5f5' }}>
+                        <TableCell padding="checkbox">
+                          {(() => {
+                            const selectable = bmSortedTransactions.filter(x => !bmLinkedIds.has(x.id)).map(x => x.id);
+                            const allSel = selectable.length > 0 && selectable.every(id => bmSelectedIds.has(id));
+                            const someSel = selectable.some(id => bmSelectedIds.has(id));
+                            return (
+                              <Checkbox
+                                size="small"
+                                checked={allSel}
+                                indeterminate={someSel && !allSel}
+                                disabled={selectable.length === 0}
+                                onChange={(e) => setBmSelectedIds(e.target.checked ? new Set(selectable) : new Set())}
+                              />
+                            );
+                          })()}
+                        </TableCell>
                         {([['date', t('common.date'), false], ['description', t('common.description'), false], ['reference', t('common.reference'), false], ['credit', t('common.amount'), true]] as const).map(([field, label, isRight]) => (
                           <TableCell
                             key={field}
@@ -1114,6 +1146,19 @@ const BankReconciliation: React.FC = () => {
                             }}
                             onClick={() => { if (!isLinked) fetchBmSuggestions(txn); }}
                           >
+                            <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
+                              {!isLinked && (
+                                <Checkbox
+                                  size="small"
+                                  checked={bmSelectedIds.has(txn.id)}
+                                  onChange={() => setBmSelectedIds(prev => {
+                                    const n = new Set(prev);
+                                    if (n.has(txn.id)) n.delete(txn.id); else n.add(txn.id);
+                                    return n;
+                                  })}
+                                />
+                              )}
+                            </TableCell>
                             <TableCell sx={{ whiteSpace: 'nowrap' }}>
                               {isLinked && <CompleteIcon sx={{ fontSize: 12, color: '#2e7d32', mr: 0.5, verticalAlign: 'middle' }} />}
                               {formatDate(txn.date)}
@@ -1132,7 +1177,7 @@ const BankReconciliation: React.FC = () => {
                       })}
                       {bmTransactions.length === 0 && (
                         <TableRow>
-                          <TableCell colSpan={4} align="center" sx={{ py: 4 }}>
+                          <TableCell colSpan={5} align="center" sx={{ py: 4 }}>
                             <Typography variant="body2" color="text.secondary">
                               {t('bankTransactions.noTransactions')}
                             </Typography>
@@ -1271,6 +1316,21 @@ const BankReconciliation: React.FC = () => {
           setBmSelectedTxn(null);
           setBmSuggestions([]);
           setSuccess(t('billMatching.categorized'));
+        }}
+      />
+
+      {/* Bulk categorize (book several to one account) dialog */}
+      <BulkCategorizeDialog
+        open={bulkOpen}
+        txns={bmTransactions.filter(x => bmSelectedIds.has(x.id))}
+        onClose={() => setBulkOpen(false)}
+        onDone={(succeededIds) => {
+          setBulkOpen(false);
+          if (succeededIds.length > 0) {
+            setBmLinkedIds(prev => { const n = new Set(prev); succeededIds.forEach(id => n.add(id)); return n; });
+            setBmSelectedIds(prev => { const n = new Set(prev); succeededIds.forEach(id => n.delete(id)); return n; });
+            setSuccess(t('billMatching.bulkDone', { count: succeededIds.length }));
+          }
         }}
       />
 
